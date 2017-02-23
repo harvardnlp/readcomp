@@ -18,8 +18,10 @@ class Dictionary(object):
 
 
 class Corpus(object):
-    def __init__(self, path, train, valid, test):
+    def __init__(self, path, train, valid, test, vocab):
         self.dictionary = Dictionary()
+        self.dictify(os.path.join(path, vocab))
+
         self.train = self.tokenize(os.path.join(path, train))
         self.valid = self.tokenize(os.path.join(path, valid))
         self.test = self.tokenize(os.path.join(path, test))
@@ -27,13 +29,20 @@ class Corpus(object):
 
     def dictify(self, file):
         with open(file, 'r') as f:
-            tokens = 0
+            for line in f:
+                words = line.split()
+                for word in words:
+                    self.dictionary.add_word(word)
+        self.dictionary.add_word('<eos>')
+        self.dictionary.add_word('<unk>')
+
+    def count_tokens(self, file):
+        tokens = 0
+        with open(file, 'r') as f:
             for line in f:
                 words = line.split() + ['<eos>']
                 tokens += len(words)
-                for word in words:
-                    self.dictionary.add_word(word)
-            return tokens
+        return tokens
 
     def tokenize(self, path):
         """Tokenizes a text file."""
@@ -43,7 +52,7 @@ class Corpus(object):
             tokens = 0
             for root, dir_names, file_names in os.walk(path):
                 for file in fnmatch.filter(file_names, '*.txt'):
-                    tokens += self.dictify(os.path.join(root,file))
+                    tokens += self.count_tokens(os.path.join(root,file))
 
             ids = torch.LongTensor(tokens)
             token = 0
@@ -54,11 +63,14 @@ class Corpus(object):
                         for line in f:
                             words = line.split() + ['<eos>']
                             for word in words:
-                                ids[token] = self.dictionary.word2idx[word]
+                                if word in self.dictionary.word2idx:
+                                    ids[token] = self.dictionary.word2idx[word]
+                                else:
+                                    ids[token] = self.dictionary.word2idx['<unk>']
                                 token += 1
         else:
             # Add words to the dictionary
-            tokens = self.dictify(path)
+            tokens = self.count_tokens(path)
 
             # Tokenize file content
             with open(path, 'r') as f:
@@ -67,7 +79,10 @@ class Corpus(object):
                 for line in f:
                     words = line.split() + ['<eos>']
                     for word in words:
-                        ids[token] = self.dictionary.word2idx[word]
+                        if word in self.dictionary.word2idx:
+                            ids[token] = self.dictionary.word2idx[word]
+                        else:
+                            ids[token] = self.dictionary.word2idx['<unk>']
                         token += 1
 
         return ids

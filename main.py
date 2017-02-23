@@ -17,6 +17,8 @@ parser.add_argument('--valid', type=str, default='lambada_development_plain_text
                     help='relative location (file or folder) of validation data')
 parser.add_argument('--test', type=str, default='lambada_test_plain_text.txt',
                     help='relative location (file or folder) of testing data')
+parser.add_argument('--vocab', type=str, default='lambada_vocabulary_sorted.txt',
+                    help='relative location of vocab file')
 parser.add_argument('--model', type=str, default='LSTM',
                     help='type of recurrent net (RNN_TANH, RNN_RELU, LSTM, GRU)')
 parser.add_argument('--emsize', type=int, default=200,
@@ -58,7 +60,7 @@ if torch.cuda.is_available():
 ###############################################################################
 
 print 'Loading data . . .'
-corpus = data.Corpus(args.data, args.train, args.valid, args.test)
+corpus = data.Corpus(args.data, args.train, args.valid, args.test, args.vocab)
 print 'Done'
 
 def batchify(data, bsz):
