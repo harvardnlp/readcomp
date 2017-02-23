@@ -1,2 +1,3 @@
 word_to_idx.csv
 *.hdf5
+*.pyc
