@@ -9,9 +9,9 @@ import data
 import model
 
 parser = argparse.ArgumentParser(description='PyTorch LAMBADA RNN/LSTM Language Model')
-parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/',
+parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/small/',
                     help='location of the data corpus')
-parser.add_argument('--train', type=str, default='train-novels',
+parser.add_argument('--train', type=str, default='train',
                     help='relative location (file or folder) of training data')
 parser.add_argument('--valid', type=str, default='lambada_development_plain_text.txt',
                     help='relative location (file or folder) of validation data')
