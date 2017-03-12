@@ -221,15 +221,15 @@ end
 
 data = hdf5.open(opt.datafile, 'r'):all()
 
-trainset   = loadData(data.train, 'train')
-validset   = loadData(data.valid)
-controlset = loadData(data.control)
-testset, answerset = loadData(data.test, 'test')
-
 if #opt.testmodel > 0 then
+  testset, answerset = loadData(data.test, 'test')
   test_model(opt.testmodel)
   os.exit()
 end
+
+trainset   = loadData(data.train, 'train')
+validset   = loadData(data.valid)
+controlset = loadData(data.control)
 
 -- print('testset')
 -- print(testset:size())
