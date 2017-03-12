@@ -43,7 +43,7 @@ cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each r
 -- data
 cmd:option('--datafile', 'lambada.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--vocab', 'lambada.vocab', 'the preprocessed Vocabulary file containing word index and unigram frequency')
-cmd:option('--testmodel', '', 'the preprocessed hdf5 data file')
+cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 128, 'number of examples per batch')
 cmd:option('--trainsize', 400000, 'number of train time-steps seen between each epoch')
 cmd:option('--validsize', 40000, 'number of valid time-steps used for early stopping and cross-validation') 
@@ -51,6 +51,8 @@ cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
 cmd:option('--tiny', false, 'use train_tiny.th7 training file')
 cmd:option('--dontsave', false, 'dont save the model')
+-- unit test
+cmd:option('--unittest', false, 'enable unit tests')
 
 cmd:text()
 local opt = cmd:parse(arg or {})
@@ -189,8 +191,9 @@ function test_model(model_file)
       if last_index > 0 then
         -- print('last index = '..last_index..', size of score array = '..outputs[last_index][b]:size(1)..'')
         local scores = outputs[last_index][b]
-        assert(math.abs(torch.sum(torch.exp(scores)) - 1) < 1e-6, 'Invalid logprob scores: '..torch.sum(torch.exp(scores)))
-
+        if opt.unittest then
+          assert(math.abs(torch.sum(torch.exp(scores)) - 1) < 1e-6, 'Invalid logprob scores: '..torch.sum(torch.exp(scores)))
+        end
         local logprob,pred_index = torch.max(scores, 1)
         local correct_index = answerset[example_index]
         if pred_index == correct_index then
