@@ -4,7 +4,6 @@ require 'rnn'
 require 'nngraph'
 local dl = require 'dataload'
 local csv = require 'csv'
-assert(nn.NCEModule and nn.NCEModule.version and nn.NCEModule.version >= 6, "update dpnn : luarocks install dpnn")
 
 --[[ command line arguments ]]--
 cmd = torch.CmdLine()
@@ -12,7 +11,7 @@ cmd:text()
 cmd:text('Train a Language Model on LAMBADA dataset')
 cmd:text('Example:')
 cmd:text("th train.lua --progress --earlystop 50 --cuda --device 2 --seqlen 20 --hiddensize '{200,200}' --batchsize 20 --startlr 1 --uniform 0.1 --cutoff 5 --schedule '{[5]=0.5,[6]=0.25,[7]=0.125,[8]=0.0625,[9]=0.03125,[10]=0.015625,[11]=0.0078125,[12]=0.00390625}'")
-cmd:text("th examples/train.lua --cuda --trainsize 400000 --validsize 40000 --cutoff 10 --batchsize 128 --seqlen 100 --hiddensize '{250,250}' --progress --device 2")
+cmd:text("th examples/train.lua --cuda --cutoff 10 --batchsize 128 --seqlen 100 --hiddensize '{250,250}' --progress --device 2")
 cmd:text('Options:')
 -- training
 cmd:option('--startlr', 0.05, 'learning rate at t=0')
@@ -25,15 +24,12 @@ cmd:option('--cutoff', -1, 'max l2-norm of concatenation of all gradParam tensor
 cmd:option('--cuda', false, 'use CUDA')
 cmd:option('--device', 1, 'sets the device (GPU) to use')
 cmd:option('--profile', false, 'profile updateOutput,updateGradInput and accGradParameters in Sequential')
-cmd:option('--maxepoch', 1000, 'maximum number of epochs to run')
+cmd:option('--maxepoch', 100, 'maximum number of epochs to run')
 cmd:option('--earlystop', 50, 'maximum number of epochs to wait to find a better local minima for early-stopping')
 cmd:option('--progress', false, 'print progress bar')
 cmd:option('--silent', false, 'don\'t print anything to stdout')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
-cmd:option('--k', 100, 'how many noise samples to use for NCE')
-cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda and tiny) will be ignored.')
-cmd:option('--Z', 1, 'normalization constant for NCE module (-1 approximates it from first batch).')
-cmd:option('--rownoise', false, 'sample k noise samples for each row for NCE module')
+cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
 cmd:option('--seqlen', 50, 'sequence length : back-propagate through time (BPTT) for this many time-steps')
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
@@ -45,11 +41,8 @@ cmd:option('--datafile', 'lambada.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--vocab', 'lambada.vocab', 'the preprocessed Vocabulary file containing word index and unigram frequency')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 128, 'number of examples per batch')
-cmd:option('--trainsize', 400000, 'number of train time-steps seen between each epoch')
-cmd:option('--validsize', 40000, 'number of valid time-steps used for early stopping and cross-validation') 
 cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory where experiment log (includes model) will be saved')
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
-cmd:option('--tiny', false, 'use train_tiny.th7 training file')
 cmd:option('--dontsave', false, 'dont save the model')
 -- unit test
 cmd:option('--unittest', false, 'enable unit tests')
@@ -70,12 +63,11 @@ if opt.cuda then -- do this before building model to prevent segfault
   cutorch.setDevice(opt.device)
 end 
 
-local xplog, lm, criterion, targetmodule
+local xplog, lm, criterion
 if opt.continue ~= '' then
   xplog = torch.load(opt.continue)
   xplog.opt.cuda = opt.cuda
   xplog.opt.device = opt.device
-  xplog.opt.tiny = opt.tiny
   opt = xplog.opt
   lm = xplog.model.module
   -- prevent re-casting bug
@@ -83,63 +75,86 @@ if opt.continue ~= '' then
     lookup.__input = nil
   end
   criterion = xplog.criterion
-  targetmodule = xplog.targetmodule
   assert(opt)
 end
 
 --[[ data set ]]--
 
-function loadData(tensor_data, data_type)
+function compare_tensor_length(left, right)
+  return left[1]:size(1) > right[1]:size(1) -- descending
+end
+
+function load_vocab(vocab_file)
+  ivocab = {}
+  vocab = {}
+  wordfreq = {}
+  local vocabFile = csv.open(vocab_file)
+  for fields in vocabFile:lines() do
+    local idx = tonumber(fields[1]) -- csv uses string by default
+    if idx ~= 0 then -- 0 is only used to separate training examples
+      local word = fields[2]
+      local wordFreq = tonumber(fields[3])
+      ivocab[idx] = word
+      vocab[word] = idx
+      wordfreq[#wordfreq + 1] = wordFreq  
+    end
+  end
+  wordfreq = torch.LongTensor(wordfreq)
+  return ivocab, vocab, wordfreq
+end
+
+-- load data into a table of tensors sorted by length, then group
+-- each consecutive chunk into batches. pad_zeros = true will pad
+-- zeros to the last batch if needed, otherwise the last batch is
+-- [end - batchsize, end]
+function loadData(tensor_data, pad_zeros)
   local tensor_table = {}
   local tensor_current = {}
   local tensor_length = tensor_data:size(1)
-  for i = 1,tensor_length do
-    if tensor_data[i] == 0 then
-      tensor_table[#tensor_table + 1] = torch.LongTensor(tensor_current)
+
+  for i = 1,tensor_length-1 do
+    if tensor_data[i + 1] == 0 then
+      tensor_table[#tensor_table + 1] = {torch.LongTensor(tensor_current), tensor_data[i]}
       tensor_current = {}
     else
       tensor_current[#tensor_current + 1] = tensor_data[i]
     end
   end
   if #tensor_current > 0 then -- handle residual
-    tensor_table[#tensor_table + 1] = torch.LongTensor(tensor_current)
+    tensor_table[#tensor_table + 1] = {torch.LongTensor(tensor_current), tensor_data[tensor_length]}
   end
-  if data_type == 'test' then
-  	local max_length = 0
-  	for i = 1, #tensor_table do
-  		max_length = math.max(max_length, tensor_table[i]:size(1) - 1)
-  	end
-  	local test_tensor = torch.LongTensor(max_length, #tensor_table)
-    local answer_tensor = torch.LongTensor(#tensor_table)
-  	for i = 1, #tensor_table do
-  		local t = tensor_table[i]
-  		local len = t:size(1)
-  		for l = 1, len - 1 do
-  			test_tensor[l][i] = t[l]
-  		end
-      answer_tensor[i] = t[len]
-  	end
-  	return test_tensor, answer_tensor
-  end
-  local d = dl.MultiSequence(tensor_table, opt.batchsize)
-  if data_type == 'train' then -- load ivocab, vocab and unigram word frequency
-    d.ivocab = {}
-    d.vocab = {}
-    d.wordfreq = {}
-    local vocabFile = csv.open('lambada.vocab')
-    for fields in vocabFile:lines() do
-      local idx = tonumber(fields[1]) -- csv uses string by default
-      if idx ~= 0 then -- 0 is only used to separate training examples
-        local word = fields[2]
-        local wordFreq = tonumber(fields[3])
-        d.ivocab[idx] = word
-        d.vocab[word] = idx
-        d.wordfreq[#d.wordfreq + 1] = wordFreq  
+
+  table.sort(tensor_table, compare_tensor_length)
+
+  local data = {}
+  local targets = {}
+  local b = 1
+  while b < #tensor_table do
+    local bstart
+    local bend
+    if pad_zeros then
+      bstart = b
+      bend = b + opt.batchsize - 1
+    else
+      bend = math.min(b + opt.batchsize - 1, #tensor_table)
+      bstart = bend - opt.batchsize + 1
+    end
+    local max_length = tensor_table[bstart][1]:size(1)
+    local btensor = torch.LongTensor(max_length, opt.batchsize):zero()
+    local btargets = torch.LongTensor(opt.batchsize):zero()
+    for bi = 1,opt.batchsize do
+      local i = bstart + bi - 1
+      if i <= #tensor_table then
+        local cur = tensor_table[i][1]
+        btensor[{{max_length - cur:size(1) + 1, max_length}, bi}] = cur
+        btargets[bi] = tensor_table[i][2]
       end
     end
-    d.wordfreq = torch.LongTensor(d.wordfreq)
+    b = bend
+    data[#data + 1] = btensor
+    targets[#targets + 1] = btargets
   end
-  return d
+  return data, targets
 end
 
 function test_model(model_file)
@@ -151,61 +166,33 @@ function test_model(model_file)
 
   model:forget()
   model:evaluate()
-  model:findModules('nn.NCEModule')[1].normalized = true
-  model:findModules('nn.NCEModule')[1].logsoftmax = true
 
+  local logsoftmax = nn.LogSoftMax()
+  if opt.cuda then
+    logsoftmax:cuda()
+  end
   local sumErr = 0
   local correct = 0
-  local max_length = testset:size(1)
-  local num_examples = testset:size(2)
-  local num_batches = math.ceil(num_examples / batch_size)
-  local rounded_num_examples = num_batches * batch_size
-  local num_pad_examples = rounded_num_examples - num_examples
+  local num_examples = 0
+  for i = 1,#testset do
+    local inputs = testset[i]
+    local target = test_targets[i]
+    local outputs = model:forward(inputs)
+    local scores = logsoftmax:forward(outputs)
 
-  local dummy_targets = target_mod:forward(torch.LongTensor(max_length, batch_size))
-
-  if num_pad_examples > 0 then
-    testset = torch.cat(testset, torch.zeros(max_length, num_pad_examples):long())
-  end
-
-  for i = 1,num_batches do
-    local batch_start = (i - 1) * batch_size + 1
-    local batch_end = i * batch_size
-    local batch_test = testset:sub(1, max_length, batch_start, batch_end)
-    -- print(batch_test)
-    local outputs = model:forward({batch_test, dummy_targets})
-
-    -- get predictions for the last word in the sentence
-    for b = 1,batch_size do
-      local example_index = batch_start + b - 1
-      if example_index > num_examples then
-        break
-      end
-      local last_index = 0
-      for l = 1,max_length do
-        if testset[l][example_index] == 0 then
-          last_index = l - 1
-          break
-        end
-      end
-      if last_index > 0 then
-        -- print('last index = '..last_index..', size of score array = '..outputs[last_index][b]:size(1)..'')
-        local scores = outputs[last_index][b]
-        if opt.unittest then
-          assert(math.abs(torch.sum(torch.exp(scores)) - 1) < 1e-6, 'Invalid logprob scores: '..torch.sum(torch.exp(scores)))
-        end
-        local logprob,pred_index = torch.max(scores, 1)
-        local correct_index = answerset[example_index]
-        if pred_index == correct_index then
+    for b = 1,outputs:size(1) do
+      if target[b] ~= 0 then
+        local logprob, pred_index = torch.max(scores[b], 1)
+        if pred_index == target[b] then
           correct = correct + 1
         end
-        local correct_logprob = outputs[last_index][b][correct_index]
-        sumErr = sumErr + correct_logprob
+        sumErr = sumErr + scores[b][target[b]]
+        num_examples = num_examples + 1
       end
     end
 
     if opt.progress then
-      xlua.progress(i, num_batches)
+      xlua.progress(i, #testset)
     end
   end
 
@@ -225,14 +212,17 @@ end
 data = hdf5.open(opt.datafile, 'r'):all()
 
 if #opt.testmodel > 0 then
-  testset, answerset = loadData(data.test, 'test')
+  testset, test_targets = loadData(data.test, true)
   test_model(opt.testmodel)
   os.exit()
 end
 
-trainset   = loadData(data.train, 'train')
-validset   = loadData(data.valid)
-controlset = loadData(data.control)
+ivocab, vocab, word_freq = load_vocab('lambada.vocab')
+
+trainset,   train_targets   = loadData(data.train)
+validset,   valid_targets   = loadData(data.valid)
+controlset, control_targets = loadData(data.control)
+testset,    test_targets    = loadData(data.test, true)
 
 -- print('testset')
 -- print(testset:size())
@@ -251,8 +241,8 @@ controlset = loadData(data.control)
 -- print(testset:sub(100,150):size())
 
 if not opt.silent then 
-  print("Vocabulary size : "..#trainset.ivocab) 
-  print("Train set split into "..opt.batchsize.." sequences of length "..trainset:size())
+  print("Vocabulary size : "..#ivocab) 
+  print("Using batch size of "..opt.batchsize)
 end
 
 --[[ language model ]]--
@@ -261,7 +251,7 @@ if not lm then
   lm = nn.Sequential()
 
   -- input layer (i.e. word embedding space)
-  local lookup = nn.LookupTableMaskZero(#trainset.ivocab, opt.inputsize)
+  local lookup = nn.LookupTableMaskZero(#ivocab, opt.inputsize)
   lookup.maxnormout = -1 -- prevent weird maxnormout behaviour
   lm:add(lookup) -- input is seqlen x batchsize
   if opt.dropout > 0 then
@@ -282,40 +272,27 @@ if not lm then
     inputsize = hiddensize
   end
 
-  lm:add(nn.SplitTable(1))
+  print('#ivocab')
+  print(#ivocab)
+
+  lm:add(nn.SplitTable(1)):add(nn.SelectTable(-1)):add(nn.Linear(inputsize, #ivocab))
 
   -- output layer
-  local unigram = trainset.wordfreq:float()
   -- print('unigram:size()')
   -- print(unigram:size())
   -- print('inputsize')
   -- print(inputsize)
   -- print('#trainset.ivocab')
   -- print(#trainset.ivocab)
-  -- print('opt.k')
-  -- print(opt.k)
-  -- print('opt.Z')
-  -- print(opt.Z)
-  local ncemodule = nn.NCEModule(inputsize, #trainset.ivocab, opt.k, unigram, opt.Z)
-  ncemodule.batchnoise = not opt.rownoise
 
-  -- NCE requires {input, target} as inputs
-  lm = nn.Sequential()
-    :add(nn.ParallelTable()
-       :add(lm):add(nn.Identity()))
-    :add(nn.ZipTable()) -- {{x1,x2,...}, {t1,t2,...}} -> {{x1,t1},{x2,t2},...}
-
-  -- encapsulate stepmodule into a Sequencer
-  lm:add(nn.Sequencer(nn.MaskZero(ncemodule, 1)))
-   
-  -- remember previous state between batches
-  lm:remember()
+  -- don't remember previous state between batches since
+  -- every example is entirely contained in a batch
+  lm:remember('neither')
 
   if opt.uniform > 0 then
     for k,param in ipairs(lm:parameters()) do
       param:uniform(-opt.uniform, opt.uniform)
     end
-    ncemodule:reset()
   end
 end
 
@@ -328,20 +305,8 @@ if not opt.silent then
    print(lm)
 end
 
-if not (criterion and targetmodule) then
-  --[[ loss function ]]--
-
-  local crit = nn.MaskZeroCriterion(nn.NCECriterion(), 0)
-
-   -- target is also seqlen x batchsize.
-  targetmodule = nn.SplitTable(1)
-  if opt.cuda then
-    targetmodule = nn.Sequential()
-      :add(nn.Convert())
-      :add(targetmodule)
-  end
-    
-  criterion = nn.SequencerCriterion(crit)
+if not (criterion) then
+  criterion = nn.CrossEntropyCriterion()
 end
 
 --[[ CUDA ]]--
@@ -349,7 +314,6 @@ end
 if opt.cuda then
   lm:cuda()
   criterion:cuda()
-  targetmodule:cuda()
 end
 
 --[[ experiment log ]]--
@@ -364,12 +328,11 @@ if not xplog then
   xplog.model = nn.Serial(lm)
   xplog.model:mediumSerial()
   xplog.criterion = criterion
-  xplog.targetmodule = targetmodule
   -- keep a log of NLL for each epoch
-  xplog.trainnceloss = {}
-  xplog.valnceloss = {}
+  xplog.trainloss = {}
+  xplog.valloss = {}
   -- will be used for early-stopping
-  xplog.minvalnceloss = 99999999
+  xplog.minvalloss = 99999999
   xplog.epoch = 0
   paths.mkdir(opt.savepath)
 end
@@ -377,8 +340,6 @@ local ntrial = 0
 
 local epoch = xplog.epoch+1
 opt.lr = opt.lr or opt.startlr
-opt.trainsize = opt.trainsize == -1 and trainset:size() or opt.trainsize
-opt.validsize = opt.validsize == -1 and validset:size() or opt.validsize
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
   print("Epoch #"..epoch.." :")
@@ -388,9 +349,13 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   local a = torch.Timer()
   lm:training()
   local sumErr = 0
-  for i, inputs, targets in trainset:subiter(opt.seqlen, opt.trainsize) do
-    targets = targetmodule:forward(targets)
-    inputs = {inputs, targets}
+
+  local rand_batches = torch.randperm(#trainset)
+  local nbatches = rand_batches:size(1)
+  for ri = 1,nbatches do
+    local i = rand_batches[ri]
+    inputs = trainset[i]
+    targets = train_targets[i]
     -- forward
     local outputs = lm:forward(inputs)
     local err = criterion:forward(outputs, targets)
@@ -411,10 +376,10 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     lm:maxParamNorm(opt.maxnormout) -- affects params
 
     if opt.progress then
-      xlua.progress(i, opt.trainsize)
+      xlua.progress(ri, nbatches)
     end
 
-    if i % 2000 == 0 then
+    if ri % 2000 == 0 then
       collectgarbage()
     end
   end
@@ -435,39 +400,41 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   end
 
   if cutorch then cutorch.synchronize() end
-  local speed = opt.trainsize*opt.batchsize/a:time().real
+  local speed = nbatches*opt.batchsize/a:time().real
   print(string.format("Speed : %f words/second; %f ms/word", speed, 1000/speed))
 
-  local nceloss = sumErr/opt.trainsize
-  print("Training error : "..nceloss)
+  local loss = sumErr/nbatches
+  print("Training error : "..loss)
 
-  xplog.trainnceloss[epoch] = nceloss
+  xplog.trainloss[epoch] = loss
 
   -- 2. cross-validation
 
   lm:evaluate()
   local sumErr = 0
-  for i, inputs, targets in validset:subiter(opt.seqlen, opt.validsize) do
-    targets = targetmodule:forward(targets)
-    local outputs = lm:forward{inputs, targets}
+
+  for i = 1, #validset do
+    local inputs = validset[i]
+    local targets = valid_targets[i]
+    local outputs = lm:forward(inputs)
     local err = criterion:forward(outputs, targets)
     sumErr = sumErr + err
      
     if opt.progress then
-      xlua.progress(i, opt.validsize)
+      xlua.progress(i, #validset)
     end
   end
 
-  local nceloss = sumErr/opt.validsize
-  print("Validation error : "..nceloss)
+  local validloss = sumErr/#validset
+  print("Validation error : "..validloss)
 
-  xplog.valnceloss[epoch] = nceloss
+  xplog.valloss[epoch] = validloss
   ntrial = ntrial + 1
 
   -- early-stopping
-  if nceloss < xplog.minvalnceloss then
+  if validloss < xplog.minvalloss then
     -- save best version of model
-    xplog.minvalnceloss = nceloss
+    xplog.minvalloss = validloss
     xplog.epoch = epoch 
     local filename = paths.concat(opt.savepath, opt.id..'.t7')
     if not opt.dontsave then
