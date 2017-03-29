@@ -80,12 +80,12 @@ class Corpus(object):
     self.control = self.tokenize(os.path.join(path, control), 0, training = False)
 
     print_msg('\nTraining Data Statistics:\n', verbose_level = 1)
-    train_context_length = np.array(self.train['context_length'])
+    train_context_length = self.train['location'][:,1]
     train_context_length = train_context_length[train_context_length > 0]
     print_msg('Context Length: max = {}, min = {}, average = {}, std = {}'.format(
       np.max(train_context_length), np.min(train_context_length), np.mean(train_context_length), np.std(train_context_length)), verbose_level = 1)
 
-    train_target_length = np.array(self.train['target_length'])
+    train_target_length = self.train['location'][:,2]
     train_target_length = train_target_length[train_target_length > 0]
     print_msg('Target Length: max = {}, min = {}, average = {}, std = {}'.format(
       np.max(train_target_length), np.min(train_target_length), np.mean(train_target_length), np.std(train_target_length)), verbose_level = 1)
@@ -127,7 +127,13 @@ class Corpus(object):
         self.tokenize_train_file(path, max_context_length, data)
       else:
         self.tokenize_test_file(path, max_context_length, data)
-    return data
+
+    sorted_data = { 'data': data['data'] }
+
+    loc = np.array([np.array(data['offsets']), np.array(data['context_length']), np.array(data['target_length'])]).T
+    loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
+    sorted_data['location'] = loc
+    return sorted_data
 
 
   # update the ids, offsets, word counts, line counts
@@ -204,27 +210,19 @@ def debug_translate(word2idx):
   with h5py.File('lambada-ar.hdf5', "r") as f:
     train = {
       'data': f['train_data'],
-      'offsets': f['train_offsets'],
-      'context_length': f['train_context_length'],
-      'target_length': f['train_target_length']
+      'location': np.array(f['train_location'], dtype=int),
     }
     test = {
       'data': f['test_data'],
-      'offsets': f['test_offsets'],
-      'context_length': f['test_context_length'],
-      'target_length': f['test_target_length']
+      'location': np.array(f['test_location'], dtype=int),
     }
     valid = {
       'data': f['valid_data'],
-      'offsets': f['valid_offsets'],
-      'context_length': f['valid_context_length'],
-      'target_length': f['valid_target_length']
+      'location': np.array(f['valid_location'], dtype=int),
     }
     control = {
       'data': f['control_data'],
-      'offsets': f['control_offsets'],
-      'context_length': f['control_context_length'],
-      'target_length': f['control_target_length']
+      'location': np.array(f['control_location'], dtype=int),
     }
 
     file_type = raw_input('Which dataset to translate? (train/test/valid/control, default = train): ')
@@ -236,20 +234,21 @@ def debug_translate(word2idx):
     elif file_type == 'control':
       to_translate = control
 
+    # sort by increasing offset to view sequentially (easier for debug)
+    to_translate['location'] = to_translate['location'][np.argsort(to_translate['location'][:,0])]
+    num_examples = to_translate['location'].shape[0]
+
     view_order = raw_input('View data from beginning or end? (begin/end, default = begin): ')
 
-    assert len(to_translate['offsets']) == len(to_translate['context_length']), "Inconsistent count"
-    assert len(to_translate['offsets']) == len(to_translate['target_length']), "Inconsistent count"
-
-    for i in range(len(to_translate['offsets'])):
+    for i in range(num_examples):
       index = raw_input('Enter a 1-based line index to view (default = next index): ')
       if index == 'q' or index == 'quit':
         break
 
-      view_index = int(index) - 1 if index != '' else i if view_order == 'begin' or view_order == '' else len(to_translate['offsets']) - i - 1
-      offset = to_translate['offsets'][view_index] - 1 # offset is 1-based index
-      context_length = to_translate['context_length'][view_index]
-      target_length = to_translate['target_length'][view_index]
+      view_index = int(index) - 1 if index != '' else i if view_order == 'begin' or view_order == '' else num_examples - i - 1
+      offset = to_translate['location'][view_index,0] - 1 # offset is 1-based index
+      context_length = to_translate['location'][view_index,1]
+      target_length = to_translate['location'][view_index,2]
       context = to_translate['data'][offset : offset + context_length]
       target = to_translate['data'][offset + context_length: offset + context_length + target_length]
 
@@ -297,25 +296,17 @@ def main(arguments):
     corpus.load(args.data, args.train, args.valid, args.test, args.control, args.max_context_length)
     corpus.dictionary.write_to_file('lambada-ar.vocab')
     with h5py.File('lambada-ar.hdf5', "w") as f:
-      f['train_data']           = np.array(corpus.train['data'])
-      f['train_offsets']        = np.array(corpus.train['offsets'])
-      f['train_context_length'] = np.array(corpus.train['context_length'])
-      f['train_target_length']  = np.array(corpus.train['target_length'])
+      f['train_data']       = np.array(corpus.train['data'])
+      f['train_location']   = np.array(corpus.train['location'])
 
-      f['valid_data']           = np.array(corpus.valid['data'])
-      f['valid_offsets']        = np.array(corpus.valid['offsets'])
-      f['valid_context_length'] = np.array(corpus.valid['context_length'])
-      f['valid_target_length']  = np.array(corpus.valid['target_length'])
+      f['valid_data']       = np.array(corpus.valid['data'])
+      f['valid_location']   = np.array(corpus.valid['location'])
 
-      f['test_data']           = np.array(corpus.test['data'])
-      f['test_offsets']        = np.array(corpus.test['offsets'])
-      f['test_context_length'] = np.array(corpus.test['context_length'])
-      f['test_target_length']  = np.array(corpus.test['target_length'])
+      f['test_data']        = np.array(corpus.test['data'])
+      f['test_location']    = np.array(corpus.test['location'])
 
-      f['control_data']           = np.array(corpus.control['data'])
-      f['control_offsets']        = np.array(corpus.control['offsets'])
-      f['control_context_length'] = np.array(corpus.control['context_length'])
-      f['control_target_length']  = np.array(corpus.control['target_length'])
+      f['control_data']     = np.array(corpus.control['data'])
+      f['control_location'] = np.array(corpus.control['location'])
 
 
 if __name__ == '__main__':
