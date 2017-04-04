@@ -178,8 +178,7 @@ class Corpus(object):
 
     print_msg('Processed {} out of total {}'.format(num_lines_processed, num_lines_in_file), verbose_level = 2)
     while num_lines_processed < num_lines_in_file:
-      data['context_length'].append(0)
-      data['target_length'].append(0)
+      del data['offsets'][-1]
       num_lines_processed += 1
 
 
@@ -206,58 +205,65 @@ class Corpus(object):
           self.dictionary.update_count(word)
 
 
-def debug_translate(word2idx):
-  with h5py.File('lambada-ar.hdf5', "r") as f:
-    train = {
-      'data': f['train_data'],
-      'location': np.array(f['train_location'], dtype=int),
-    }
-    test = {
-      'data': f['test_data'],
-      'location': np.array(f['test_location'], dtype=int),
-    }
-    valid = {
-      'data': f['valid_data'],
-      'location': np.array(f['valid_location'], dtype=int),
-    }
-    control = {
-      'data': f['control_data'],
-      'location': np.array(f['control_location'], dtype=int),
-    }
+def debug_translate(idx2word, mode):
+  if mode == 'manual':
+    input = raw_input('Enter sentence to translate: ')
+    while input != 'q' and input != 'quit':
+      tokens = input.split()
+      print(' '.join([idx2word[int(t)] for t in tokens]))
+      input = raw_input('Enter sentence to translate: ')
+  else:
+    with h5py.File('lambada-ar.hdf5', "r") as f:
+      train = {
+        'data': f['train_data'],
+        'location': np.array(f['train_location'], dtype=int),
+      }
+      test = {
+        'data': f['test_data'],
+        'location': np.array(f['test_location'], dtype=int),
+      }
+      valid = {
+        'data': f['valid_data'],
+        'location': np.array(f['valid_location'], dtype=int),
+      }
+      control = {
+        'data': f['control_data'],
+        'location': np.array(f['control_location'], dtype=int),
+      }
 
-    file_type = raw_input('Which dataset to translate? (train/test/valid/control, default = train): ')
-    to_translate = train
-    if file_type == 'test':
-      to_translate = test
-    elif file_type == 'valid':
-      to_translate = valid
-    elif file_type == 'control':
-      to_translate = control
+      file_type = raw_input('Which dataset to translate? (train/test/valid/control, default = train): ')
+      to_translate = train
+      if file_type == 'test':
+        to_translate = test
+      elif file_type == 'valid':
+        to_translate = valid
+      elif file_type == 'control':
+        to_translate = control
 
-    # sort by increasing offset to view sequentially (easier for debug)
-    to_translate['location'] = to_translate['location'][np.argsort(to_translate['location'][:,0])]
-    num_examples = to_translate['location'].shape[0]
+      # sort by increasing offset to view sequentially (easier for debug)
+      to_translate['location'] = to_translate['location'][np.argsort(to_translate['location'][:,0])]
+      num_examples = to_translate['location'].shape[0]
 
-    view_order = raw_input('View data from beginning or end? (begin/end, default = begin): ')
+      view_order = raw_input('View data from beginning or end? (begin/end, default = begin): ')
 
-    for i in range(num_examples):
-      index = raw_input('Enter a 1-based line index to view (default = next index): ')
-      if index == 'q' or index == 'quit':
-        break
+      for i in range(num_examples):
+        index = raw_input('Enter a 1-based line index to view (default = next index): ')
+        if index == 'q' or index == 'quit':
+          break
 
-      view_index = int(index) - 1 if index != '' else i if view_order == 'begin' or view_order == '' else num_examples - i - 1
-      offset = to_translate['location'][view_index,0] - 1 # offset is 1-based index
-      context_length = to_translate['location'][view_index,1]
-      target_length = to_translate['location'][view_index,2]
-      context = to_translate['data'][offset : offset + context_length]
-      target = to_translate['data'][offset + context_length: offset + context_length + target_length]
+        view_index = int(index) - 1 if index != '' else i if view_order == 'begin' or view_order == '' else num_examples - i - 1
+        offset = to_translate['location'][view_index,0] - 1 # offset is 1-based index
+        context_length = to_translate['location'][view_index,1]
+        target_length = to_translate['location'][view_index,2]
+        context = to_translate['data'][offset : offset + context_length]
+        target = to_translate['data'][offset + context_length: offset + context_length + target_length]
 
-      print '1-BASED LINE INDEX = {}'.format(view_index + 1)
-      print('CONTEXT')
-      print([word2idx[token] for token in context])
+        print '1-BASED LINE INDEX = {}'.format(view_index + 1)
+        print('CONTEXT')
+        print([idx2word[token] for token in context])
 
-      print('TARGET')
-      print([word2idx[token] for token in target])
+        print('TARGET')
+        print([idx2word[token] for token in target])
       
 
 
@@ -266,7 +272,7 @@ def main(arguments):
   parser = argparse.ArgumentParser(
       description=__doc__,
       formatter_class=argparse.RawDescriptionHelpFormatter)
-  parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/',
+  parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset',
                       help='location of the data corpus')
   parser.add_argument('--train', type=str, default='train-novels',
                       help='relative location (file or folder) of training data')
@@ -280,8 +286,8 @@ def main(arguments):
                       help='relative location of vocab file')
   parser.add_argument('--max_context_length', type=int, default=50,
                       help='max # of tokens to include in context')
-  parser.add_argument('--debug_translate', type=bool, default=False,
-                      help='translate the preprocessed .hdf5 back into words')
+  parser.add_argument('--debug_translate', type=str, default='',
+                      help='translate the preprocessed .hdf5 back into words, or "manual" to translate manual input')
   parser.add_argument('--verbose_level', type=int, default=1,
                       help='level of verbosity, ranging from 0 to 2, default = 1')
   args = parser.parse_args(arguments)
@@ -290,8 +296,8 @@ def main(arguments):
   # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
 
   corpus = Corpus(args.data, args.vocab)
-  if args.debug_translate > 0:
-    debug_translate(corpus.dictionary.idx2word)
+  if len(args.debug_translate) > 0:
+    debug_translate(corpus.dictionary.idx2word, args.debug_translate)
   else:
     corpus.load(args.data, args.train, args.valid, args.test, args.control, args.max_context_length)
     corpus.dictionary.write_to_file('lambada-ar.vocab')
