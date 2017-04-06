@@ -173,25 +173,25 @@ function test_model(model_file)
   local sumErr = 0
   local correct = 0
   local num_examples = 0
-  for i = 1,#testset do
-    local inputs = testset[i]
-    local target = test_targets[i]
+  for i = 1,#tests_con do
+    local inputs = tests_con[i]
+    local answer = tests_ans[i]
     local outputs = model:forward(inputs)
     local scores = logsoftmax:forward(outputs)
 
     for b = 1,outputs:size(1) do
-      if target[b] ~= 0 then
+      if answer[b] ~= 0 then
         local logprob, pred_index = torch.max(scores[b], 1)
-        if pred_index == target[b] then
+        if pred_index == answer[b] then
           correct = correct + 1
         end
-        sumErr = sumErr + scores[b][target[b]]
+        sumErr = sumErr + scores[b][answer[b]]
         num_examples = num_examples + 1
       end
     end
 
     if opt.progress then
-      xlua.progress(i, #testset)
+      xlua.progress(i, #tests_con)
     end
   end
 
@@ -348,7 +348,8 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   lm:training()
   local sumErr = 0
 
-  for i = 1,#train_con do
+  local nbatches = #train_con
+  for i = 1,nbatches do
     inputs = train_con[i]
     answers = train_ans[i]
     -- forward
@@ -371,7 +372,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     lm:maxParamNorm(opt.maxnormout) -- affects params
 
     if opt.progress then
-      xlua.progress(i, #train_con)
+      xlua.progress(i, nbatches)
     end
 
     if i % 2000 == 0 then
@@ -408,19 +409,20 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   lm:evaluate()
   local sumErr = 0
 
-  for i = 1, #validset do
-    local inputs = validset[i]
-    local targets = valid_targets[i]
+  local nvalbatches = #valid_con - 1 -- ignore the last batch which contains zero-padded data
+  for i = 1, nvalbatches do
+    local inputs = valid_con[i]
+    local answers = valid_ans[i]
     local outputs = lm:forward(inputs)
-    local err = criterion:forward(outputs, targets)
+    local err = criterion:forward(outputs, answers)
     sumErr = sumErr + err
      
     if opt.progress then
-      xlua.progress(i, #validset)
+      xlua.progress(i, nvalbatches)
     end
   end
 
-  local validloss = sumErr/#validset
+  local validloss = sumErr/nvalbatches
   print("Validation error : "..validloss)
 
   xplog.valloss[epoch] = validloss
