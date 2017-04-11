@@ -33,6 +33,8 @@ cmd:option('--continue', '', 'path to model for which training should be continu
 -- rnn layer 
 cmd:option('--trainsize', 100000, 'number of training examples to use per epoch')
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
+cmd:option('-Dmt',20,'dimension of m(t) in Attentive Reader model')
+cmd:option('-Dg',20,'dimension of g(d,q) in Attentive Reader model')
 cmd:option('--hiddensize', '{256,256}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
 cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
@@ -258,10 +260,41 @@ if not lm then
   -- rnn layers
   local inputsize = opt.inputsize
   for i,hiddensize in ipairs(opt.hiddensize) do
-    -- this is a faster version of nn.Sequencer(nn.FastLSTM(inpusize, hiddensize))
-    local rnn =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) 
-      or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize) -- LSTM with a projection layer
-    rnn.maskzero = true
+    local brnn = nn.SeqBRNNP(inputsize, hiddensize, opt.projsize, false, nn.JoinTable(3))
+    brnn:MaskZero(true)
+    lm:add(brnn)
+    if opt.dropout > 0 then
+      lm:add(nn.Dropout(opt.dropout))
+    end
+    inputsize = 2 * hiddensize
+  end
+
+  lm:add(nn.MapTable()
+      :add(nn.Sequential()
+      :add(nn.Linear(inputsize, opt.Dmt))
+      :add(nn.View(1, opt.batchsize, opt.Dmt))))
+    :add(nn.JoinTable(1)) -- seqlen x batchsize x dmt
+
+  -- for query
+  lm_query = nn.Sequential()
+  local lookup_query = lookup:clone('weight', 'gradWeight')
+  lm_query:add(lookup_query) -- input is seqlen x batchsize
+  if opt.dropout > 0 then
+      lm_query:add(nn.Dropout(opt.dropout))
+  end
+
+  local inputsize = opt.inputsize
+  for i,hiddensize in ipairs(opt.hiddensize) do
+
+    local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) 
+      or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
+    rnn_forward.maskzero = true
+
+    local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) 
+      or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
+    rnn_backward.maskzero = true
+
+
     lm:add(rnn)
     if opt.dropout > 0 then
       lm:add(nn.Dropout(opt.dropout))
@@ -269,7 +302,7 @@ if not lm then
     inputsize = hiddensize
   end
 
-  lm:add(nn.SplitTable(1)):add(nn.SelectTable(-1)):add(nn.Linear(inputsize, #ivocab))
+  lm_query:add(nn.SplitTable(1)):add(nn.SelectTable(-1)):add(nn.Linear(inputsize, #ivocab))
 
   -- output layer
   -- print('unigram:size()')
@@ -334,13 +367,21 @@ local ntrial = 0
 
 local epoch = xplog.epoch+1
 opt.lr = opt.lr or opt.startlr
+
+-- load all examples into memory
+if opt.trainsize <= 0 or opt.trainsize >= data.train_location:size(1) then
+  train_con, train_tar, train_ans = loadData(data.train_data,   data.train_location,   opt.trainsize)
+end
+
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
   print("Epoch #"..epoch.." :")
 
   -- preload training data for a number of samples
-  train_con, train_tar, train_ans = loadData(data.train_data,   data.train_location,   opt.trainsize)
-
+  -- useful when total # of examples is too large to be loaded into memory
+  if opt.trainsize > 0 and opt.trainsize < data.train_location:size(1) then
+    train_con, train_tar, train_ans = loadData(data.train_data,   data.train_location,   opt.trainsize)
+  end
   -- 1. training
    
   local a = torch.Timer()
@@ -348,7 +389,9 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   local sumErr = 0
 
   local nbatches = #train_con
-  for i = 1,nbatches do
+  local irand = torch.randperm(nbatches)
+  for ir = 1,nbatches do
+    local i = irand[ir]
     inputs = train_con[i]
     answers = train_ans[i]
     -- forward
