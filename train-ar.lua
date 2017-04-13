@@ -247,14 +247,14 @@ end
 --[[ language model ]]--
 
 if not lm then
-  lm = nn.Sequential()
+  Yd = nn.Sequential()
 
   -- input layer (i.e. word embedding space)
   local lookup = nn.LookupTableMaskZero(#ivocab, opt.inputsize)
   lookup.maxnormout = -1 -- prevent weird maxnormout behaviour
-  lm:add(lookup) -- input is seqlen x batchsize
+  Yd:add(lookup) -- input is seqlen x batchsize
   if opt.dropout > 0 then
-      lm:add(nn.Dropout(opt.dropout))
+      Yd:add(nn.Dropout(opt.dropout))
   end
 
   -- rnn layers
@@ -262,47 +262,78 @@ if not lm then
   for i,hiddensize in ipairs(opt.hiddensize) do
     local brnn = nn.SeqBRNNP(inputsize, hiddensize, opt.projsize, false, nn.JoinTable(3))
     brnn:MaskZero(true)
-    lm:add(brnn)
+    Yd:add(brnn)
     if opt.dropout > 0 then
-      lm:add(nn.Dropout(opt.dropout))
+      Yd:add(nn.Dropout(opt.dropout))
     end
     inputsize = 2 * hiddensize
   end
 
-  lm:add(nn.MapTable()
+  WymYd = nn.Sequential():add(nn.SplitTable(1)):add(nn.MapTable()
       :add(nn.Sequential()
-      :add(nn.Linear(inputsize, opt.Dmt))
+      :add(nn.Linear(inputsize, opt.Dmt)) -- W_ym
       :add(nn.View(1, opt.batchsize, opt.Dmt))))
     :add(nn.JoinTable(1)) -- seqlen x batchsize x dmt
 
   -- for query
-  lm_query = nn.Sequential()
-  local lookup_query = lookup:clone('weight', 'gradWeight')
-  lm_query:add(lookup_query) -- input is seqlen x batchsize
+  lm_query_forward  = nn.Sequential()
+  local lookup_query_forward = lookup:clone('weight', 'gradWeight')
+  lm_query_forward:add(lookup_query_forward) -- input is seqlen x batchsize
   if opt.dropout > 0 then
-      lm_query:add(nn.Dropout(opt.dropout))
+      lm_query_forward:add(nn.Dropout(opt.dropout))
   end
 
-  local inputsize = opt.inputsize
+  lm_query_backward = nn.Sequential()
+  local lookup_query_backward = lookup:clone('weight', 'gradWeight')
+  lm_query_backward:add(lookup_query_backward) -- input is seqlen x batchsize
+  if opt.dropout > 0 then
+      lm_query_backward:add(nn.Dropout(opt.dropout))
+  end
+
+  inputsize = opt.inputsize
   for i,hiddensize in ipairs(opt.hiddensize) do
 
-    local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) 
-      or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
+    local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
     rnn_forward.maskzero = true
+    lm_query_forward:add(rnn_forward)
 
-    local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) 
-      or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
+    local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
     rnn_backward.maskzero = true
+    lm_query_backward:add(rnn_backward)
 
-
-    lm:add(rnn)
     if opt.dropout > 0 then
-      lm:add(nn.Dropout(opt.dropout))
+      lm_query_forward:add(nn.Dropout(opt.dropout))
+      lm_query_backward:add(nn.Dropout(opt.dropout))
     end
+
     inputsize = hiddensize
   end
 
-  lm_query:add(nn.SplitTable(1)):add(nn.SelectTable(-1)):add(nn.Linear(inputsize, #ivocab))
+  lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
+  lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
+
+  inputsize = 2 * hiddensize
+
+  Yq = nn.Sequential()
+    :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
+    :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
+    :add(nn.Linear(inputsize, opt.Dmt)) -- W_um : batch x Dmt
+
+  -- attention
+  S = nn.Sequential
+    :add(nn.CAddTableBroadcast())
+    :add(nn.Tanh())
+    :add(nn.SplitTable(1))
+    :add(nn.MapTable():add(nn.Linear(opt.Dmt, 1)))
+    :add(nn.JoinTable(2)) -- batch x seqlen
+    :add(nn.SoftMax())
+    :add(nn.Unsqueeze(2)) -- batch x 1 x seqlen
+
+  R = nn.Sequential()
+    :add(nn.ParallelTable()
+      :add(nn.Identity()) -- applied to Yq, batch x 1 x seqlen
+      :add(nn.Transpose({1,2}))) -- applied to Yd, batch x seqlen x Dmt
+    :add(nn.MM()) -- batch x 1 x Dmt
 
   -- output layer
   -- print('unigram:size()')
