@@ -2,6 +2,8 @@ require 'hdf5'
 require 'paths'
 require 'rnn'
 require 'nngraph'
+require 'SeqBRNNP'
+require 'CAddTableBroadcast'
 local dl = require 'dataload'
 local csv = require 'csv'
 
@@ -122,7 +124,8 @@ function loadData(tensor_data, tensor_location, sample)
     local max_context_length = tensor_location[batch_start][2]
     local max_target_length = torch.max(tensor_location[{{batch_start, math.min(batch_start + opt.batchsize - 1, num_examples)}, 3}])
     local context = torch.LongTensor(max_context_length, opt.batchsize):zero()
-    local target = torch.LongTensor(max_target_length, opt.batchsize):zero()
+    local target_forward  = torch.LongTensor(max_target_length, opt.batchsize):zero()
+    local target_backward = torch.LongTensor(max_target_length, opt.batchsize):zero()
     local answer = torch.LongTensor(opt.batchsize):zero()
     
     for idx = 1, opt.batchsize do
@@ -132,25 +135,19 @@ function loadData(tensor_data, tensor_location, sample)
         local cur_context_length = tensor_location[iexample][2]
         local cur_target_length = tensor_location[iexample][3]
 
-        -- print('cur_offset')
-        -- print(cur_offset)
-        -- print('cur_context_length')
-        -- print(cur_context_length)
-        -- print('cur_target_length')
-        -- print(cur_target_length)
-
         local cur_context = tensor_data[{{cur_offset, cur_offset + cur_context_length - 1}}]
         local cur_target  = tensor_data[{{cur_offset + cur_context_length, cur_offset + cur_context_length + cur_target_length - 2}}]
         local cur_answer  = tensor_data[cur_offset + cur_context_length + cur_target_length - 1]
         
         context[{{max_context_length - cur_context:size(1) + 1, max_context_length}, idx}] = cur_context
-        target[{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target
+        target_forward [{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target
+        target_backward[{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target:index(1, torch.linspace(cur_target:size(1), 1, cur_target:size(1)):long()) -- reverse order
         answer[idx] = cur_answer
       end
     end
 
     contexts[#contexts + 1] = context
-    targets[#targets + 1] = target
+    targets[#targets + 1] = {target_forward, target_backward}
     answers[#answers + 1] = answer
   end
 
@@ -176,8 +173,9 @@ function test_model(model_file)
   local num_examples = 0
   for i = 1,#tests_con do
     local inputs = tests_con[i]
+    local targets = tests_tar[i]
     local answer = tests_ans[i]
-    local outputs = model:forward(inputs)
+    local outputs = model:forward({inputs, targets})
     local scores = logsoftmax:forward(outputs)
 
     for b = 1,outputs:size(1) do
@@ -222,22 +220,6 @@ ivocab, vocab, word_freq = load_vocab('lambada-ar.vocab')
 valid_con, valid_tar, valid_ans = loadData(data.valid_data,   data.valid_location,   -1)
 contr_con, contr_tar, contr_ans = loadData(data.control_data, data.control_location, -1)
 tests_con, tests_tar, tests_ans = loadData(data.test_data,    data.test_location,    -1)
-
--- print('testset')
--- print(testset:size())
--- print('answerset')
--- print(answerset:view(1,-1))
--- print('testset:sub(1,200)')
--- print(testset:sub(1,100))
--- print('trainset:size()')
--- print(trainset:size())
--- print(trainset:sub(100,150):size())
--- print('validset:size()')
--- print(validset:size())
--- print(validset:sub(100,150):size())
--- print('testset:size()')
--- print(testset:size())
--- print(testset:sub(100,150):size())
 
 if not opt.silent then 
   print("Vocabulary size : "..#ivocab) 
@@ -312,15 +294,16 @@ if not lm then
   lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
   lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
 
-  inputsize = 2 * hiddensize
+  inputsize = 2 * inputsize
 
-  Yq = nn.Sequential()
+  U = nn.Sequential()
     :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
     :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
-    :add(nn.Linear(inputsize, opt.Dmt)) -- W_um : batch x Dmt
+
+  WumU = nn.Linear(inputsize, opt.Dmt) -- W_um : batch x Dmt
 
   -- attention
-  S = nn.Sequential
+  S = nn.Sequential()
     :add(nn.CAddTableBroadcast())
     :add(nn.Tanh())
     :add(nn.SplitTable(1))
@@ -331,17 +314,33 @@ if not lm then
 
   R = nn.Sequential()
     :add(nn.ParallelTable()
-      :add(nn.Identity()) -- applied to Yq, batch x 1 x seqlen
-      :add(nn.Transpose({1,2}))) -- applied to Yd, batch x seqlen x Dmt
-    :add(nn.MM()) -- batch x 1 x Dmt
+      :add(nn.Identity()) -- applied to S, batch x 1 x seqlen
+      :add(nn.Transpose({1,2}))) -- applied to Yd, batch x seqlen x (2 * hiddensize)
+    :add(nn.MM())
+    :add(nn.Squeeze()) -- batch x (2 * hiddensize)
 
-  -- output layer
-  -- print('unigram:size()')
-  -- print(unigram:size())
-  -- print('inputsize')
-  -- print(inputsize)
-  -- print('#trainset.ivocab')
-  -- print(#trainset.ivocab)
+  A = nn.Sequential()
+    :add(nn.ParallelTable()
+      :add(nn.Linear(inputsize, opt.Dg))
+      :add(nn.Linear(inputsize, opt.Dg)))
+    :add(nn.CAddTable())
+    :add(nn.Tanh())
+    :add(nn.Linear(opt.Dg, #ivocab))
+
+  x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
+  q_inp = nn.Identity()():annotate({name = 'q', description  = 'query'})
+
+  nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+  nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
+
+  nng_WymYd = WymYd(nng_Yd):annotate({name = 'WymYd', description = 'Wym * Y'})
+  nng_WumU = WumU(nng_U):annotate({name = 'WumU', description = 'Wum * U'})
+
+  nng_S = S({nng_WymYd, nng_WumU}):annotate({name = 'S', description = 'attention layer'})
+  nng_R = R({nng_S, nng_Yd}):annotate({name = 'R', description = 'doc representation'})
+  nng_A = A({nng_R, nng_U}):annotate({name = 'A', description = 'final word scores'})
+
+  lm = nn.gModule({x_inp, q_inp}, {nng_A})
 
   -- don't remember previous state between batches since
   -- every example is entirely contained in a batch
@@ -424,16 +423,17 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   for ir = 1,nbatches do
     local i = irand[ir]
     inputs = train_con[i]
+    targets = train_tar[i]
     answers = train_ans[i]
     -- forward
-    local outputs = lm:forward(inputs)
+    local outputs = lm:forward({inputs, targets})
     local err = criterion:forward(outputs, answers)
     sumErr = sumErr + err
     -- backward 
     local gradOutputs = criterion:backward(outputs, answers)
     local a = torch.Timer()
     lm:zeroGradParameters()
-    lm:backward(inputs, gradOutputs)
+    lm:backward({inputs, targets}, gradOutputs)
     
     -- update
     if opt.cutoff > 0 then
@@ -445,7 +445,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     lm:maxParamNorm(opt.maxnormout) -- affects params
 
     if opt.progress then
-      xlua.progress(i, nbatches)
+      xlua.progress(ir, nbatches)
     end
 
     if i % 2000 == 0 then
@@ -485,11 +485,12 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   local nvalbatches = #valid_con - 1 -- ignore the last batch which contains zero-padded data
   for i = 1, nvalbatches do
     local inputs = valid_con[i]
+    local targets = valid_tar[i]
     local answers = valid_ans[i]
-    local outputs = lm:forward(inputs)
+    local outputs = lm:forward({inputs, targets})
     local err = criterion:forward(outputs, answers)
     sumErr = sumErr + err
-     
+
     if opt.progress then
       xlua.progress(i, nvalbatches)
     end
