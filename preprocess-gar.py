@@ -15,9 +15,9 @@ import re
 
 args = {}
 
-# Preprocessing: for each LAMBADA train novel, generate contexts of at least some minimum length, in a sliding window manner, i.e.
-# if the first consists of 4 lines: l1,l2,l3,l4; the next context could be l2,l3,l4,l5... Target sentence is always the next sentence
-# following the context, given that it meets length criteria, otherwise the whole <context,target> sample is skipped
+stop_words = { "?", "??", "???", "!", "!!", "!!!", ".", "?!", "!?" }
+
+# Preprocessing: split each training example from the dataset https://arxiv.org/abs/1610.08431 into context and target pairs.
 
 def print_msg(message, verbose_level):
   if args.verbose_level >= verbose_level:
@@ -60,27 +60,21 @@ class Dictionary(object):
 
 
 class Corpus(object):
-  def __init__(self, path, vocab):
-    self.dictify(os.path.join(path, vocab))
+  def __init__(self):
+    self.dictify()
 
 
-  def dictify(self, file):
+  def dictify(self):
     self.dictionary = Dictionary()
     self.dictionary.add_word('<sep>') # map to 0 for masked rnn
     self.dictionary.add_word('<unk>')
-    with open(file, 'r') as f:
-      for line in f:
-        words = line.split()
-        for word in words:
-          self.dictionary.add_word(word)
-    print_msg('Vocab size = {}'.format(len(self.dictionary)), verbose_level = 1)
 
 
-  def load(self, path, train, valid, test, control, max_context_length):
-    self.train   = self.tokenize(os.path.join(path, train), max_context_length, training = True)
-    self.valid   = self.tokenize(os.path.join(path, valid), 0, training  = False)
-    self.test    = self.tokenize(os.path.join(path, test), 0, training = False)
-    self.control = self.tokenize(os.path.join(path, control), 0, training = False)
+  def load(self, path, train, valid, test, control):
+    self.train   = self.tokenize(os.path.join(path, train),   training = True)
+    self.valid   = self.tokenize(os.path.join(path, valid),   training = False)
+    self.test    = self.tokenize(os.path.join(path, test),    training = False)
+    self.control = self.tokenize(os.path.join(path, control), training = False)
 
     print_msg('\nTraining Data Statistics:\n', verbose_level = 1)
     train_context_length = self.train['location'][:,1]
@@ -94,13 +88,7 @@ class Corpus(object):
       np.max(train_target_length), np.min(train_target_length), np.mean(train_target_length), np.std(train_target_length)), verbose_level = 1)
 
 
-  def tokenize(self, path, max_context_length, training):
-    """
-    Tokenizes all data found recursively in a path (supports single file or folder).
-    :param max_context_length: Sentences will be concatenated up to this length.
-        If a single sentence is longer it is unchanged.
-        Set to 0 to treat each sentence separately. 
-    """
+  def tokenize(self, path, training):
     assert os.path.exists(path)
     
     data = { 
@@ -110,26 +98,7 @@ class Corpus(object):
       'target_length': [] # count of words in the target
     }
 
-    if os.path.isdir(path):
-      num_files = 0
-      for root, dir_names, file_names in os.walk(path):
-        for file in fnmatch.filter(file_names, '*.txt'):
-          num_files += 1
-
-      num_processed_files = 0
-      for root, dir_names, file_names in os.walk(path):
-        for file in fnmatch.filter(file_names, '*.txt'):
-          if training:
-            self.tokenize_train_file(os.path.join(root, file), max_context_length, data)
-          else:
-            self.tokenize_test_file(os.path.join(root, file), max_context_length, data)
-          num_processed_files += 1
-          print_msg('Progress = {:2.2f}%'.format(num_processed_files * 100.0 / num_files), verbose_level = 1)
-    else:
-      if training:
-        self.tokenize_train_file(path, max_context_length, data)
-      else:
-        self.tokenize_test_file(path, max_context_length, data)
+    self.tokenize_file(path, data, training)
 
     sorted_data = { 'data': data['data'] }
 
@@ -140,72 +109,34 @@ class Corpus(object):
 
 
   # update the ids, offsets, word counts, line counts
-  def tokenize_train_file(self, file, max_context_length, data):
-    # Tokenize file content
-    target_sentence = []
-    to_be_processed = [] # all sentences to be processed
+  def tokenize_file(self, file, data, training):
     num_lines_in_file = 0
-    num_lines_processed = 0
     with open(file, 'r') as f:
-      running_context_length = 0
       for line in f:
         num_lines_in_file += 1
         words = line.split()
-        to_be_processed.append(words)
+        num_words = len(words)
 
-        data['offsets'].append(len(data['data']) + 1)
-
-        # found enough data 
-        # need at least 2 sentences so that one can be the target sentence
-        while running_context_length > max_context_length and len(to_be_processed) > 1:
-          if len(words) < 3:
-            print_msg('-----------------------------------------------', verbose_level = 2)
-            print_msg('INFO: Skipping {}'.format(to_be_processed[0]), verbose_level = 2)
-            print_msg('INFO: Running Sequence Length = {}'.format(running_context_length), verbose_level = 2)
-            print_msg('INFO: Target sentence {} should contain at least 3 tokens: <query> <answer> <period> but only has {}'.format(line.strip(), len(words)), verbose_level = 2)
+        sep = -1
+        for i in range(num_words - 2, -1, -1):
+          if words[i] in stop_words:
+            sep = i
             break
-          else:
-            data['context_length'].append(running_context_length)
-            data['target_length'].append(len(words) - 1) # exclude last token which is most likely a period
-
-            running_context_length -= len(to_be_processed[0])
-            num_lines_processed += 1
-            del to_be_processed[0]
-        for word in words:
-          if word not in self.dictionary.word2idx:
-            word = '<unk>'
-          data['data'].append(self.dictionary.word2idx[word])
-          self.dictionary.update_count(word)
-
-        running_context_length += len(words)
-
-    print_msg('Processed {} out of total {}'.format(num_lines_processed, num_lines_in_file), verbose_level = 2)
-    while num_lines_processed < num_lines_in_file:
-      del data['offsets'][-1]
-      num_lines_processed += 1
-
-
-  def tokenize_test_file(self, file, max_context_length, data):
-    # Tokenize file content
-    with open(file, 'r') as f:
-      for line in f:
-        words = line.split()
-        last_period = rindex(words, '.')
-        last_stopping_token = last_period if last_period > 0 else max(rindex(words, '!'), rindex(words, '?'))
-        context_length = last_stopping_token + 1
-        target_length = len(words) - context_length
-
-        assert target_length > 0, "Target length must be positive"
 
         data['offsets'].append(len(data['data']) + 1)
-        data['context_length'].append(context_length)
-        data['target_length'].append(target_length)
+        data['context_length'].append(sep + 1)
+        data['target_length'].append(num_words - sep - 1)
 
         for word in words:
           if word not in self.dictionary.word2idx:
-            word = '<unk>'
+            if training:
+              self.dictionary.add_word(word)
+            else:
+              word = '<unk>'
           data['data'].append(self.dictionary.word2idx[word])
           self.dictionary.update_count(word)
+
+        print_msg('Processed {} lines'.format(num_lines_in_file), verbose_level = 2)
 
 
 def debug_translate(idx2word, mode):
@@ -216,7 +147,7 @@ def debug_translate(idx2word, mode):
       print(' '.join([idx2word[int(t)] for t in tokens]))
       input = raw_input('Enter sentence to translate: ')
   else:
-    with h5py.File('lambada-ar.hdf5', "r") as f:
+    with h5py.File('lambada-gar.hdf5', "r") as f:
       train = {
         'data': f['train_data'],
         'location': np.array(f['train_location'], dtype=int),
@@ -269,42 +200,36 @@ def debug_translate(idx2word, mode):
         print([idx2word[token] for token in target])
       
 
-
 def main(arguments):
   global args
   parser = argparse.ArgumentParser(
       description=__doc__,
       formatter_class=argparse.RawDescriptionHelpFormatter)
-  parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/small',
+  parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/lambada-train-valid',
                       help='location of the data corpus')
-  parser.add_argument('--train', type=str, default='train',
+  parser.add_argument('--train', type=str, default='train.txt',
                       help='relative location (file or folder) of training data')
-  parser.add_argument('--valid', type=str, default='lambada_development_plain_text.txt',
+  parser.add_argument('--valid', type=str, default='valid.txt',
                       help='relative location (file or folder) of validation data')
-  parser.add_argument('--test', type=str, default='lambada_test_plain_text.txt',
+  parser.add_argument('--test', type=str, default='test.txt',
                       help='relative location (file or folder) of testing data')
-  parser.add_argument('--control', type=str, default='lambada_control_test_data_plain_text.txt',
+  parser.add_argument('--control', type=str, default='control.txt',
                       help='relative location (file or folder) of control data')
-  parser.add_argument('--vocab', type=str, default='lambada_vocabulary_sorted.txt',
-                      help='relative location of vocab file')
-  parser.add_argument('--max_context_length', type=int, default=50,
-                      help='max # of tokens to include in context')
   parser.add_argument('--debug_translate', type=str, default='',
                       help='translate the preprocessed .hdf5 back into words, or "manual" to translate manual input')
   parser.add_argument('--verbose_level', type=int, default=1,
                       help='level of verbosity, ranging from 0 to 2, default = 1')
   args = parser.parse_args(arguments)
-
   # get embeddings
   # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
 
-  corpus = Corpus(args.data, args.vocab)
+  corpus = Corpus()
   if len(args.debug_translate) > 0:
     debug_translate(corpus.dictionary.idx2word, args.debug_translate)
   else:
-    corpus.load(args.data, args.train, args.valid, args.test, args.control, args.max_context_length)
-    corpus.dictionary.write_to_file('lambada-ar.vocab')
-    with h5py.File('lambada-ar.hdf5', "w") as f:
+    corpus.load(args.data, args.train, args.valid, args.test, args.control)
+    corpus.dictionary.write_to_file('lambada-gar.vocab')
+    with h5py.File('lambada-gar.hdf5', "w") as f:
       f['train_data']       = np.array(corpus.train['data'])
       f['train_location']   = np.array(corpus.train['location'])
 

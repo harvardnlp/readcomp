@@ -181,7 +181,7 @@ function test_model(model_file)
     for b = 1,outputs:size(1) do
       if answer[b] ~= 0 then
         local logprob, pred_index = torch.max(scores[b], 1)
-        if pred_index == answer[b] then
+        if pred_index[1] == answer[b] then
           correct = correct + 1
         end
         sumErr = sumErr + scores[b][answer[b]]
