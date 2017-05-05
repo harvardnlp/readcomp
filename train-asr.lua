@@ -10,7 +10,7 @@ local csv = require 'csv'
 --[[ command line arguments ]]--
 cmd = torch.CmdLine()
 cmd:text()
-cmd:text('Train a Language Model on LAMBADA dataset')
+cmd:text('Train a Attention Sum Reader on LAMBADA dataset')
 cmd:text('Example:')
 cmd:text("th train.lua --progress --earlystop 50 --cuda --device 2 --seqlen 20 --hiddensize '{200,200}' --batchsize 20 --startlr 1 --uniform 0.1 --cutoff 5 --schedule '{[5]=0.5,[6]=0.25,[7]=0.125,[8]=0.0625,[9]=0.03125,[10]=0.015625,[11]=0.0078125,[12]=0.00390625}'")
 cmd:text("th examples/train.lua --cuda --cutoff 10 --batchsize 128 --seqlen 100 --hiddensize '{250,250}' --progress --device 2")
