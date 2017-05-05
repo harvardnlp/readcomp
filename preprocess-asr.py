@@ -75,9 +75,8 @@ class Corpus(object):
     self.dictionary = Dictionary()
     with open(file, 'r') as f:
       for line in f:
-        words = line.split('\t')
-        self.dictionary.add_word(words[1])
-    print 'Vocab size = {}'.format(len(self.dictionary))
+        self.dictionary.add_word(line.strip())
+    print 'Vocab size = {}'.format(len(self.dictionary), verbose_level = 1)
 
   def load(self, path, train, valid, test, control):
     self.train   = self.tokenize(os.path.join(path, train),   training = True)
@@ -138,10 +137,7 @@ class Corpus(object):
 
         for word in words:
           if word not in self.dictionary.word2idx:
-            if training:
-              self.dictionary.add_word(word)
-            else:
-              word = '<unk>'
+            word = '<unk>'
           data['data'].append(self.dictionary.word2idx[word])
           self.dictionary.update_count(word)
 
@@ -226,6 +222,8 @@ def main(arguments):
                       help='relative location (file or folder) of control data')
   parser.add_argument('--vocab', type=str, default='vocab.txt',
                       help='relative location of vocab file')
+  parser.add_argument('--out_file', type=str, default='lambada-gar.hdf5',
+                      help='output hdf5 file')
   parser.add_argument('--debug_translate', type=str, default='',
                       help='translate the preprocessed .hdf5 back into words, or "manual" to translate manual input')
   parser.add_argument('--verbose_level', type=int, default=1,
@@ -234,14 +232,12 @@ def main(arguments):
   # get embeddings
   # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
 
+  corpus = Corpus(args.vocab)
   if len(args.debug_translate) > 0:
-    corpus = Corpus('lambada-gar.vocab')
     debug_translate(corpus.dictionary.idx2word, args.debug_translate)
   else:
-    corpus = Corpus()
     corpus.load(args.data, args.train, args.valid, args.test, args.control)
-    corpus.dictionary.write_to_file('lambada-gar.vocab')
-    with h5py.File('lambada-gar.hdf5', "w") as f:
+    with h5py.File(args.out_file, "w") as f:
       f['train_data']       = np.array(corpus.train['data'])
       f['train_location']   = np.array(corpus.train['location'])
 
