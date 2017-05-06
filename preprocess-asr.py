@@ -143,6 +143,11 @@ class Corpus(object):
             sep = i
             break
 
+        target_length = num_words - sep - 1
+        if target_length < 3:
+          print_msg('INFO: SKIPPING... Target sentence should contain at least 3 tokens', verbose_level = 2)
+          continue
+
         data['offsets'].append(len(data['data']) + 1)
         data['context_length'].append(sep + 1)
         data['target_length'].append(num_words - sep - 1)

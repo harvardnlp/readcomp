@@ -139,6 +139,13 @@ function loadData(tensor_data, tensor_location, sample)
     answer_inds[#answer_inds + 1] = answer_ind
   end
 
+  -- inddd = 16
+  -- print(contexts[inddd][{{},1}]:contiguous():view(1,-1))
+  -- print(targets[inddd][1][{{},1}]:contiguous():view(1,-1))
+  -- print(answer_inds[inddd][1])
+  -- print(answers[inddd][1])
+  -- print(answer_inds.test()) -- break on purpose
+
   return contexts, targets, answers, answer_inds
 end
 
@@ -179,14 +186,25 @@ function test_model(model_file)
             end
           end
         end
-        -- print('outputs[b]:sub(1,300):view(1,-1)')
-        -- print(outputs[b]:sub(1,300):view(1,-1))
-        -- print('outputs[b]:sub(66001,66100):view(1,-1)')
-        -- print(outputs[b]:sub(66001,66100):view(1,-1))
-        -- print('pred_index[1]')
-        -- print(pred_index[1])
-        -- print('answer[b]')
-        -- print(answer[b])
+
+        -- if b == 13 then
+        --   print('inputs[{{},b}]')
+        --   print(inputs[{{},b}]:contiguous():view(1,-1))
+        --   print('targets[{{},b}]')
+        --   print(targets[1][{{},b}]:contiguous():view(1,-1))
+        --   print('answer[b]')
+        --   print(answer[b])
+        --   print('outputs')
+        --   print(outputs[b]:view(1,-1))
+        --   print('word_to_prob')
+        --   for i,v in pairs(word_to_prob) do
+        --     print(''..i..' : '..v)
+        --   end
+        --   print('max_word')
+        --   print(max_word)
+
+        --   outputs:quit()
+        -- end
         if max_word == answer[b] then
           correct = correct + 1
         end
@@ -395,18 +413,39 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     local answer_inds = train_ans_ind[i]
     -- forward
     local outputs = lm:forward({inputs, targets})
-    local grad_outputs = torch.zeros(opt.batchsize, outputs:size(2)):cuda()
+    local grad_outputs = torch.zeros(opt.batchsize, outputs:size(2))
 
+    if opt.cuda then
+      grad_outputs:cuda()
+    end
+
+    -- if ir == 3 then
+    --   print('inputs')
+    --   print(inputs[{{}, 1}]:contiguous():view(1,-1))
+    --   print('train_ans[i][1]')
+    --   print(train_ans[i][1])
+    --   print('outputs')
+    --   print(outputs)
+    -- end
     -- compute attention sum, loss & gradients
     local err = 0
     for ib = 1, opt.batchsize do
       local prob_answer = 0
       for ians = 1, #answer_inds[ib] do
+        -- if ir == 3 then
+        --   print('answer_inds[ib][ians]')
+        --   print(answer_inds[ib][ians])
+        -- end
         prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
       end
       for ians = 1, #answer_inds[ib] do
         grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
       end
+      -- if ir == 3 then
+      --   print('prob_answer')
+      --   print(prob_answer)
+      --   prob_answer:quit()
+      -- end
       err = err - torch.log(prob_answer)
     end
     sumErr = sumErr + err / opt.batchsize
