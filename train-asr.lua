@@ -34,7 +34,8 @@ cmd:option('--silent', false, 'don\'t print anything to stdout')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
-cmd:option('--trainsize', 100000, 'number of training examples to use per epoch')
+cmd:option('--trainsize', 10000, 'number of batches to use per epoch')
+cmd:option('--validsize', -1, 'number of batches to use per epoch for validation')
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--hiddensize', '{256}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
@@ -88,8 +89,14 @@ function loadData(tensor_data, tensor_location, sample)
   if sample == -1 then
     batches = torch.range(1, num_examples, opt.batchsize)
   else
-    sample = math.min(sample, num_examples - opt.batchsize + 1)
-    batches = torch.randperm(num_examples - opt.batchsize + 1):sub(1,sample)
+    slices = torch.range(1, num_examples, opt.batchsize)
+    randind = torch.randperm(slices:size(1))
+    batches = torch.zeros(sample)
+    for is = 1, sample do
+      batches[is] = slices[randind[is]]
+    end
+    -- sample = math.min(sample, num_examples - opt.batchsize + 1)
+    -- batches = torch.randperm(num_examples - opt.batchsize + 1):sub(1,sample)
   end
   local num_batches = batches:size(1)
 
@@ -149,12 +156,18 @@ function loadData(tensor_data, tensor_location, sample)
   return contexts, targets, answers, answer_inds
 end
 
-function test_model(model_file)
-  -- load model for computing accuracy & perplexity for target answers
-  local metadata = torch.load(model_file)
-  local batch_size = metadata.opt.batchsize
-  local model = metadata.model
-  local puncs = metadata.puncs -- punctuations
+function test_model()
+  local metadata
+  local batch_size = opt.batchsize
+  local model = lm
+  local model_file = paths.concat(opt.savepath, opt.id..'.t7')
+  if not lm then
+    -- load model for computing accuracy & perplexity for target answers
+    metadata = torch.load(model_file)
+    batch_size = metadata.opt.batchsize
+    model = metadata.model
+    puncs = metadata.puncs -- punctuations
+  end
 
   model:forget()
   model:evaluate()
@@ -243,7 +256,7 @@ if #opt.testmodel > 0 then
   os.exit()
 end
 
-valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   -1)
+valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   opt.validsize)
 contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location, -1)
 tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_location,    -1)
 
@@ -416,7 +429,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     local grad_outputs = torch.zeros(opt.batchsize, outputs:size(2))
 
     if opt.cuda then
-      grad_outputs:cuda()
+      grad_outputs = grad_outputs:cuda()
     end
 
     -- if ir == 3 then
@@ -539,7 +552,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     if not opt.dontsave then
       print("Found new minima. Saving to "..filename)
       torch.save(filename, xplog)
-      test_model(filename)
+      test_model()
     end
     ntrial = 0
   elseif ntrial >= opt.earlystop then
@@ -553,4 +566,4 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   epoch = epoch + 1
 end
 
-test_model(paths.concat(opt.savepath, opt.id..'.t7'))
+test_model()
