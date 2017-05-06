@@ -63,19 +63,31 @@ class Corpus(object):
   def __init__(self):
     self.dictify()
 
-  def __init__(self, file):
-    self.dictify(file)
+  def __init__(self, vocab_file, punc_file):
+    self.dictify(vocab_file, punc_file)
 
   def dictify(self):
     self.dictionary = Dictionary()
+    self.punctuations = []
     self.dictionary.add_word('<sep>') # map to 0 for masked rnn
     self.dictionary.add_word('<unk>')
 
-  def dictify(self, file):
+  def dictify(self, vocab_file, punc_file):
     self.dictionary = Dictionary()
-    with open(file, 'r') as f:
+    self.punctuations = []
+    self.dictionary.add_word('<sep>') # map to 0 for masked rnn
+    self.dictionary.add_word('<unk>')
+
+    with open(vocab_file, 'r') as f:
       for line in f:
-        self.dictionary.add_word(line.strip())
+        if line.strip():
+          self.dictionary.add_word(line.strip())
+
+    with open(punc_file, 'r') as f:
+      for line in f:
+        if line.strip():
+          self.punctuations.append(self.dictionary.add_word(line.strip()))
+
     print 'Vocab size = {}'.format(len(self.dictionary), verbose_level = 1)
 
   def load(self, path, train, valid, test, control):
@@ -115,7 +127,7 @@ class Corpus(object):
     sorted_data['location'] = loc
     return sorted_data
 
-
+ 
   # update the ids, offsets, word counts, line counts
   def tokenize_file(self, file, data, training):
     num_lines_in_file = 0
@@ -152,7 +164,7 @@ def debug_translate(idx2word, mode):
       print(' '.join([idx2word[int(t)] for t in tokens]))
       input = raw_input('Enter sentence to translate: ')
   else:
-    with h5py.File('lambada-gar.hdf5', "r") as f:
+    with h5py.File('lambada-asr.hdf5', "r") as f:
       train = {
         'data': f['train_data'],
         'location': np.array(f['train_location'], dtype=int),
@@ -210,7 +222,7 @@ def main(arguments):
   parser = argparse.ArgumentParser(
       description=__doc__,
       formatter_class=argparse.RawDescriptionHelpFormatter)
-  parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/lambada-train-valid',
+  parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/lambada-train-valid/small/',
                       help='location of the data corpus')
   parser.add_argument('--train', type=str, default='train.txt',
                       help='relative location (file or folder) of training data')
@@ -222,7 +234,9 @@ def main(arguments):
                       help='relative location (file or folder) of control data')
   parser.add_argument('--vocab', type=str, default='vocab.txt',
                       help='relative location of vocab file')
-  parser.add_argument('--out_file', type=str, default='lambada-gar.hdf5',
+  parser.add_argument('--punctuations', type=str, default='punctuations.txt',
+                      help='relative location of punctuation file')
+  parser.add_argument('--out_file', type=str, default='lambada-asr.hdf5',
                       help='output hdf5 file')
   parser.add_argument('--debug_translate', type=str, default='',
                       help='translate the preprocessed .hdf5 back into words, or "manual" to translate manual input')
@@ -232,12 +246,15 @@ def main(arguments):
   # get embeddings
   # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
 
-  corpus = Corpus(args.vocab)
+  corpus = Corpus(args.data + args.vocab, args.data + args.punctuations)
   if len(args.debug_translate) > 0:
     debug_translate(corpus.dictionary.idx2word, args.debug_translate)
   else:
     corpus.load(args.data, args.train, args.valid, args.test, args.control)
     with h5py.File(args.out_file, "w") as f:
+      f['punctuations']     = np.array(corpus.punctuations) # punctuations are ignored during test time
+      f['vocab_size']       = np.array([len(corpus.dictionary)])
+
       f['train_data']       = np.array(corpus.train['data'])
       f['train_location']   = np.array(corpus.train['location'])
 

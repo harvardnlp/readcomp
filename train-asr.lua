@@ -4,6 +4,7 @@ require 'rnn'
 require 'nngraph'
 require 'SeqBRNNP'
 require 'CAddTableBroadcast'
+tds = require 'tds'
 local dl = require 'dataload'
 local csv = require 'csv'
 
@@ -41,8 +42,7 @@ cmd:option('--hiddensize', '{256}', 'number of hidden units used at output of ea
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
 cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
-cmd:option('--datafile', 'lambada-ar.hdf5', 'the preprocessed hdf5 data file')
-cmd:option('--vocab', 'lambada-ar.vocab', 'the preprocessed Vocabulary file containing word index and unigram frequency')
+cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 32, 'number of examples per batch')
 cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory where experiment log (includes model) will be saved')
@@ -67,7 +67,7 @@ if opt.cuda then -- do this before building model to prevent segfault
   cutorch.setDevice(opt.device)
 end 
 
-local xplog, lm, criterion
+local xplog, lm
 if opt.continue ~= '' then
   xplog = torch.load(opt.continue)
   xplog.opt.cuda = opt.cuda
@@ -78,30 +78,10 @@ if opt.continue ~= '' then
   for i,lookup in ipairs(lm:findModules('nn.LookupTableMaskZero')) do
     lookup.__input = nil
   end
-  criterion = xplog.criterion
   assert(opt)
 end
 
 --[[ data set ]]--
-
-function load_vocab(vocab_file)
-  ivocab = {}
-  vocab = {}
-  wordfreq = {}
-  local vocabFile = csv.open(vocab_file)
-  for fields in vocabFile:lines() do
-    local idx = tonumber(fields[1]) -- csv uses string by default
-    if idx ~= 0 then -- 0 is only used to separate training examples
-      local word = fields[2]
-      local wordFreq = tonumber(fields[3])
-      ivocab[idx] = word
-      vocab[word] = idx
-      wordfreq[#wordfreq + 1] = wordFreq  
-    end
-  end
-  wordfreq = torch.LongTensor(wordfreq)
-  return ivocab, vocab, wordfreq
-end
 
 function loadData(tensor_data, tensor_location, sample)
 
@@ -118,7 +98,8 @@ function loadData(tensor_data, tensor_location, sample)
   contexts = {}
   targets = {}
   answers = {}
-  
+  answer_inds = {} -- locations of answer in the context
+
   for i = 1,num_batches do
     local batch_start = batches[i]
     local max_context_length = tensor_location[batch_start][2]
@@ -127,8 +108,10 @@ function loadData(tensor_data, tensor_location, sample)
     local target_forward  = torch.LongTensor(max_target_length, opt.batchsize):zero()
     local target_backward = torch.LongTensor(max_target_length, opt.batchsize):zero()
     local answer = torch.LongTensor(opt.batchsize):zero()
+    local answer_ind = {}
     
     for idx = 1, opt.batchsize do
+      answer_ind[idx] = {}
       local iexample = batch_start + idx - 1  
       if iexample <= num_examples then
         local cur_offset = tensor_location[iexample][1]
@@ -143,23 +126,30 @@ function loadData(tensor_data, tensor_location, sample)
         target_forward [{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target
         target_backward[{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target:index(1, torch.linspace(cur_target:size(1), 1, cur_target:size(1)):long()) -- reverse order
         answer[idx] = cur_answer
+
+        for aid = 1, max_context_length do
+          if context[aid][idx] == cur_answer then
+            answer_ind[idx][#answer_ind[idx] + 1] = aid
+          end
+        end
       end
     end
 
     contexts[#contexts + 1] = context
     targets[#targets + 1] = {target_forward, target_backward}
     answers[#answers + 1] = answer
+    answer_inds[#answer_inds + 1] = answer_ind
   end
 
-  return contexts, targets, answers
+  return contexts, targets, answers, answer_inds
 end
 
 function test_model(model_file)
   -- load model for computing accuracy & perplexity for target answers
   local metadata = torch.load(model_file)
-  local target_mod = metadata.targetmodule
   local batch_size = metadata.opt.batchsize
   local model = metadata.model
+  local puncs = metadata.puncs -- punctuations
 
   model:forget()
   model:evaluate()
@@ -172,9 +162,25 @@ function test_model(model_file)
     local answer = tests_ans[i]
     local outputs = model:forward({inputs, targets})
 
+    -- compute attention sum for each word in the context, except for punctuation symbols
     for b = 1,outputs:size(1) do
       if answer[b] ~= 0 then
-        local logprob, pred_index = torch.max(outputs[b], 1)
+        local word_to_prob = tds.hash()
+        local max_prob = 0
+        local max_word = 0
+        for iw = 1, outputs:size(2) do
+          local word = inputs[iw][b]
+          if word ~= 0 and puncs[word] == nil then -- ignore punctuation
+            if word_to_prob[word] == nil then
+              word_to_prob[word] = 0
+            end
+            word_to_prob[word] = word_to_prob[word] + outputs[b][iw]
+            if max_prob < word_to_prob[word] then
+              max_prob = word_to_prob[word]
+              max_word = word
+            end
+          end
+        end
         -- print('outputs[b]:sub(1,300):view(1,-1)')
         -- print(outputs[b]:sub(1,300):view(1,-1))
         -- print('outputs[b]:sub(66001,66100):view(1,-1)')
@@ -183,7 +189,7 @@ function test_model(model_file)
         -- print(pred_index[1])
         -- print('answer[b]')
         -- print(answer[b])
-        if pred_index[1] == answer[b] then
+        if max_word == answer[b] then
           correct = correct + 1
         end
         num_examples = num_examples + 1
@@ -208,21 +214,25 @@ function test_model(model_file)
 end
 
 data = hdf5.open(opt.datafile, 'r'):all()
+puncs = tds.hash()
+for i = 1, data.punctuations:size(1) do
+  puncs[data.punctuations[i]] = 1
+end
+
+vocab_size = data.vocab_size[1]
 
 if #opt.testmodel > 0 then
-  tests_con, tests_tar, tests_ans = loadData(data.test_data, data.test_location, -1)
+  tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_location, -1)
   test_model(opt.testmodel)
   os.exit()
 end
 
-ivocab, vocab, word_freq = load_vocab(opt.vocab)
-
-valid_con, valid_tar, valid_ans = loadData(data.valid_data,   data.valid_location,   -1)
-contr_con, contr_tar, contr_ans = loadData(data.control_data, data.control_location, -1)
-tests_con, tests_tar, tests_ans = loadData(data.test_data,    data.test_location,    -1)
+valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   -1)
+contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location, -1)
+tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_location,    -1)
 
 if not opt.silent then 
-  print("Vocabulary size : "..#ivocab) 
+  print("Vocabulary size : "..vocab_size) 
   print("Using batch size of "..opt.batchsize)
 end
 
@@ -232,7 +242,7 @@ if not lm then
   Yd = nn.Sequential()
 
   -- input layer (i.e. word embedding space)
-  local lookup = nn.LookupTableMaskZero(#ivocab, opt.inputsize)
+  local lookup = nn.LookupTableMaskZero(vocab_size, opt.inputsize)
   lookup.maxnormout = -1 -- prevent weird maxnormout behaviour
   Yd:add(lookup) -- input is seqlen x batchsize
   if opt.dropout > 0 then
@@ -250,12 +260,7 @@ if not lm then
     end
     inputsize = 2 * hiddensize
   end
-
-  WymYd = nn.Sequential():add(nn.SplitTable(1)):add(nn.MapTable()
-      :add(nn.Sequential()
-      :add(nn.Linear(inputsize, opt.Dmt)) -- W_ym
-      :add(nn.View(1, opt.batchsize, opt.Dmt))))
-    :add(nn.JoinTable(1)) -- seqlen x batchsize x dmt
+  Yd:add(nn.Transpose({1,2})) -- batchsize x seqlen x (2 * hiddensize)
 
   -- for query
   lm_query_forward  = nn.Sequential()
@@ -299,33 +304,9 @@ if not lm then
   U = nn.Sequential()
     :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
     :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
+    :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
-  WumU = nn.Linear(inputsize, opt.Dmt) -- W_um : batch x Dmt
-
-  -- attention
-  S = nn.Sequential()
-    :add(nn.CAddTableBroadcast())
-    :add(nn.Tanh())
-    :add(nn.SplitTable(1))
-    :add(nn.MapTable():add(nn.Linear(opt.Dmt, 1)))
-    :add(nn.JoinTable(2)) -- batch x seqlen
-    :add(nn.SoftMax())
-    :add(nn.Unsqueeze(2)) -- batch x 1 x seqlen
-
-  R = nn.Sequential()
-    :add(nn.ParallelTable()
-      :add(nn.Identity()) -- applied to S, batch x 1 x seqlen
-      :add(nn.Transpose({1,2}))) -- applied to Yd, batch x seqlen x (2 * hiddensize)
-    :add(nn.MM())
-    :add(nn.Squeeze()) -- batch x (2 * hiddensize)
-
-  A = nn.Sequential()
-    :add(nn.ParallelTable()
-      :add(nn.Linear(inputsize, opt.Dg))
-      :add(nn.Linear(inputsize, opt.Dg)))
-    :add(nn.CAddTable())
-    :add(nn.Tanh())
-    :add(nn.Linear(opt.Dg, #ivocab))
+  Attention = nn.Sequential():add(nn.MM()):add(nn.Squeeze()):add(nn.SoftMax()) -- batch x seqlen
 
   x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
   q_inp = nn.Identity()():annotate({name = 'q', description  = 'query'})
@@ -333,13 +314,7 @@ if not lm then
   nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
   nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
 
-  nng_WymYd = WymYd(nng_Yd):annotate({name = 'WymYd', description = 'Wym * Y'})
-  nng_WumU = WumU(nng_U):annotate({name = 'WumU', description = 'Wum * U'})
-
-  nng_S = S({nng_WymYd, nng_WumU}):annotate({name = 'S', description = 'attention layer'})
-  nng_R = R({nng_S, nng_Yd}):annotate({name = 'R', description = 'doc representation'})
-  nng_A = A({nng_R, nng_U}):annotate({name = 'A', description = 'final word scores'})
-
+  nng_A = Attention({nng_Yd, nng_U}):annotate({name = 'Attention', description = 'attention on query & context dot-product'})
   lm = nn.gModule({x_inp, q_inp}, {nng_A})
 
   -- don't remember previous state between batches since
@@ -362,15 +337,10 @@ if not opt.silent then
   print(lm)
 end
 
-if not (criterion) then
-  criterion = nn.CrossEntropyCriterion()
-end
-
 --[[ CUDA ]]--
 
 if opt.cuda then
   lm:cuda()
-  criterion:cuda()
 end
 
 --[[ experiment log ]]--
@@ -379,12 +349,11 @@ end
 if not xplog then
   xplog = {}
   xplog.opt = opt -- save all hyper-parameters and such
+  xplog.puncs = puncs
   xplog.dataset = 'Lambada'
-  xplog.vocab = vocab
   -- will only serialize params
   xplog.model = nn.Serial(lm)
   xplog.model:mediumSerial()
-  xplog.criterion = criterion
   -- keep a log of NLL for each epoch
   xplog.trainloss = {}
   xplog.valloss = {}
@@ -400,7 +369,7 @@ opt.lr = opt.lr or opt.startlr
 
 -- load all examples into memory
 if opt.trainsize <= 0 or opt.trainsize >= data.train_location:size(1) then
-  train_con, train_tar, train_ans = loadData(data.train_data,   data.train_location,   opt.trainsize)
+  train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data,   data.train_location,   opt.trainsize)
 end
 
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
@@ -410,7 +379,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   -- preload training data for a number of samples
   -- useful when total # of examples is too large to be loaded into memory
   if opt.trainsize > 0 and opt.trainsize < data.train_location:size(1) then
-    train_con, train_tar, train_ans = loadData(data.train_data,   data.train_location,   opt.trainsize)
+    train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data,   data.train_location,   opt.trainsize)
   end
   -- 1. training
    
@@ -420,20 +389,34 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
 
   local nbatches = #train_con
   local irand = torch.randperm(nbatches)
+
   for ir = 1,nbatches do
     local i = irand[ir]
-    inputs = train_con[i]
-    targets = train_tar[i]
-    answers = train_ans[i]
+    local inputs = train_con[i]
+    local targets = train_tar[i]
+    local answer_inds = train_ans_ind[i]
     -- forward
     local outputs = lm:forward({inputs, targets})
-    local err = criterion:forward(outputs, answers)
-    sumErr = sumErr + err
+    local grad_outputs = torch.zeros(opt.batchsize, outputs:size(2)):cuda()
+
+    -- compute attention sum, loss & gradients
+    local err = 0
+    for ib = 1, opt.batchsize do
+      local prob_answer = 0
+      for ians = 1, #answer_inds[ib] do
+        prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
+      end
+      for ians = 1, #answer_inds[ib] do
+        grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
+      end
+      err = err - torch.log(prob_answer)
+    end
+    sumErr = sumErr + err / opt.batchsize
+
     -- backward 
-    local gradOutputs = criterion:backward(outputs, answers)
     local a = torch.Timer()
     lm:zeroGradParameters()
-    lm:backward({inputs, targets}, gradOutputs)
+    lm:backward({inputs, targets}, grad_outputs)
     
     -- update
     if opt.cutoff > 0 then
@@ -487,9 +470,16 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   for i = 1, nvalbatches do
     local inputs = valid_con[i]
     local targets = valid_tar[i]
-    local answers = valid_ans[i]
+    local answer_inds = valid_ans_ind[i]
     local outputs = lm:forward({inputs, targets})
-    local err = criterion:forward(outputs, answers)
+    local err = 0
+    for ib = 1, opt.batchsize do
+      local prob_answer = 0
+      for ians = 1, #answer_inds[ib] do
+        prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
+      end
+      err = err - torch.log(prob_answer)
+    end
     sumErr = sumErr + err
 
     if opt.progress then
@@ -512,6 +502,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     if not opt.dontsave then
       print("Found new minima. Saving to "..filename)
       torch.save(filename, xplog)
+      test_model(filename)
     end
     ntrial = 0
   elseif ntrial >= opt.earlystop then
