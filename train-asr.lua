@@ -29,7 +29,7 @@ cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensor
 cmd:option('--cuda', false, 'use CUDA')
 cmd:option('--device', 1, 'sets the device (GPU) to use')
 cmd:option('--profile', false, 'profile updateOutput,updateGradInput and accGradParameters in Sequential')
-cmd:option('--maxepoch', 50, 'maximum number of epochs to run')
+cmd:option('--maxepoch', 100, 'maximum number of epochs to run')
 cmd:option('--earlystop', 30, 'maximum number of epochs to wait to find a better local minima for early-stopping')
 cmd:option('--progress', false, 'print progress bar')
 cmd:option('--silent', false, 'don\'t print anything to stdout')
