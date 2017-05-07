@@ -15,7 +15,8 @@ import re
 
 args = {}
 
-stop_words = { "?", "??", "???", "!", "!!", "!!!", ".", "?!", "!?" }
+end_words  = { "?", "??", "???", "!", "!!", "!!!", ".", "?!", "!?" }
+
 
 # Preprocessing: split each training example from the dataset https://arxiv.org/abs/1610.08431 into context and target pairs.
 
@@ -63,8 +64,8 @@ class Corpus(object):
   def __init__(self):
     self.dictify()
 
-  def __init__(self, vocab_file, punc_file):
-    self.dictify(vocab_file, punc_file)
+  def __init__(self, vocab_file, punc_file, stop_word_file):
+    self.dictify(vocab_file, punc_file, stop_word_file)
 
   def dictify(self):
     self.dictionary = Dictionary()
@@ -72,9 +73,10 @@ class Corpus(object):
     self.dictionary.add_word('<sep>') # map to 0 for masked rnn
     self.dictionary.add_word('<unk>')
 
-  def dictify(self, vocab_file, punc_file):
+  def dictify(self, vocab_file, punc_file, stop_word_file):
     self.dictionary = Dictionary()
     self.punctuations = []
+    self.stopwords = []
     self.dictionary.add_word('<sep>') # map to 0 for masked rnn
     self.dictionary.add_word('<unk>')
 
@@ -88,11 +90,16 @@ class Corpus(object):
         if line.strip():
           self.punctuations.append(self.dictionary.add_word(line.strip()))
 
+    with open(stop_word_file, 'r') as f:
+      for line in f:
+        if line.strip():
+          self.stopwords.append(self.dictionary.add_word(line.strip()))
+
     print 'Vocab size = {}'.format(len(self.dictionary), verbose_level = 1)
 
   def load(self, path, train, valid, test, control):
     self.train   = self.tokenize(os.path.join(path, train),   training = True)
-    self.valid   = self.tokenize(os.path.join(path, valid),   training = False)
+    self.valid   = self.tokenize(os.path.join(path, valid),   training = True)
     self.test    = self.tokenize(os.path.join(path, test),    training = False)
     self.control = self.tokenize(os.path.join(path, control), training = False)
 
@@ -139,9 +146,20 @@ class Corpus(object):
 
         sep = -1
         for i in range(num_words - 2, -1, -1):
-          if words[i] in stop_words:
+          if words[i] in end_words:
             sep = i
             break
+
+        if training:
+          # make sure answer is part of context (for computing loss & gradients during training)
+          found_answer = False
+          answer = words[num_words - 1]
+          for i in range(0, sep + 1):
+            if answer == words[i]:
+              found_answer = True
+          if not found_answer:
+            print_msg('INFO: SKIPPING... Target answer not found in context', verbose_level = 2)
+            continue
 
         target_length = num_words - sep - 1
         if target_length < 3:
@@ -158,7 +176,7 @@ class Corpus(object):
           data['data'].append(self.dictionary.word2idx[word])
           self.dictionary.update_count(word)
 
-        print_msg('Processed {} lines'.format(num_lines_in_file), verbose_level = 2)
+        print_msg('Processed {} lines'.format(num_lines_in_file), verbose_level = 3)
 
 
 def debug_translate(idx2word, mode):
@@ -227,7 +245,7 @@ def main(arguments):
   parser = argparse.ArgumentParser(
       description=__doc__,
       formatter_class=argparse.RawDescriptionHelpFormatter)
-  parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/lambada-train-valid/small/',
+  parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/lambada-train-valid/original/',
                       help='location of the data corpus')
   parser.add_argument('--train', type=str, default='train.txt',
                       help='relative location (file or folder) of training data')
@@ -241,23 +259,26 @@ def main(arguments):
                       help='relative location of vocab file')
   parser.add_argument('--punctuations', type=str, default='punctuations.txt',
                       help='relative location of punctuation file')
+  parser.add_argument('--stopwords', type=str, default='mctest-stopwords.txt',
+                      help='relative location of stop-words file')
   parser.add_argument('--out_file', type=str, default='lambada-asr.hdf5',
                       help='output hdf5 file')
   parser.add_argument('--debug_translate', type=str, default='',
                       help='translate the preprocessed .hdf5 back into words, or "manual" to translate manual input')
-  parser.add_argument('--verbose_level', type=int, default=1,
-                      help='level of verbosity, ranging from 0 to 2, default = 1')
+  parser.add_argument('--verbose_level', type=int, default=2,
+                      help='level of verbosity, ranging from 0 to 2, default = 2')
   args = parser.parse_args(arguments)
   # get embeddings
   # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
 
-  corpus = Corpus(args.data + args.vocab, args.data + args.punctuations)
+  corpus = Corpus(args.data + args.vocab, args.data + args.punctuations, args.data + args.stopwords)
   if len(args.debug_translate) > 0:
     debug_translate(corpus.dictionary.idx2word, args.debug_translate)
   else:
     corpus.load(args.data, args.train, args.valid, args.test, args.control)
     with h5py.File(args.out_file, "w") as f:
       f['punctuations']     = np.array(corpus.punctuations) # punctuations are ignored during test time
+      f['stopwords']        = np.array(corpus.stopwords) # punctuations are ignored during test time
       f['vocab_size']       = np.array([len(corpus.dictionary)])
 
       f['train_data']       = np.array(corpus.train['data'])

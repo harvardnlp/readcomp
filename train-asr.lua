@@ -46,6 +46,7 @@ cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 4, 'number of examples per batch')
 cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory where experiment log (includes model) will be saved')
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
+cmd:option('--evalheuristics', false, 'evaluate heuristics approach e.g. random selection from context, most likely')
 cmd:option('--dontsave', false, 'dont save the model')
 -- unit test
 cmd:option('--unittest', false, 'enable unit tests')
@@ -82,7 +83,71 @@ end
 
 --[[ data set ]]--
 
-function loadData(tensor_data, tensor_location, sample)
+
+function test_answer_in_context(tensor_data, tensor_location, sample)
+
+  print('Verify that answer is in context')
+
+  local num_examples = tensor_location:size(1)
+  local batches
+  if sample == -1 then
+    batches = torch.range(1, num_examples, opt.batchsize)
+  else
+    slices = torch.range(1, num_examples, opt.batchsize)
+    randind = torch.randperm(slices:size(1))
+    batches = torch.zeros(sample)
+    for is = 1, sample do
+      batches[is] = slices[randind[is]]
+    end
+    -- sample = math.min(sample, num_examples - opt.batchsize + 1)
+    -- batches = torch.randperm(num_examples - opt.batchsize + 1):sub(1,sample)
+  end
+  local num_batches = batches:size(1)
+
+  local num_answers = 0
+  local num_correct_random = 0
+  local num_correct_likely = 0
+  for i = 1,num_batches do
+    local batch_start = batches[i]
+    local max_context_length = tensor_location[batch_start][2]
+    local max_target_length = torch.max(tensor_location[{{batch_start, math.min(batch_start + opt.batchsize - 1, num_examples)}, 3}])
+    local context = torch.LongTensor(max_context_length, opt.batchsize):zero()
+    local target_forward  = torch.LongTensor(max_target_length, opt.batchsize):zero()
+    local target_backward = torch.LongTensor(max_target_length, opt.batchsize):zero()
+    local answer = torch.LongTensor(opt.batchsize):zero()
+    local answer_ind = {}
+    
+    for idx = 1, opt.batchsize do
+      answer_ind[idx] = {}
+      local iexample = batch_start + idx - 1  
+      if iexample <= num_examples then
+        local cur_offset = tensor_location[iexample][1]
+        local cur_context_length = tensor_location[iexample][2]
+        local cur_target_length = tensor_location[iexample][3]
+
+        local cur_context = tensor_data[{{cur_offset, cur_offset + cur_context_length - 1}}]
+        local cur_target  = tensor_data[{{cur_offset + cur_context_length, cur_offset + cur_context_length + cur_target_length - 2}}]
+        local cur_answer  = tensor_data[cur_offset + cur_context_length + cur_target_length - 1]
+        
+        context[{{max_context_length - cur_context:size(1) + 1, max_context_length}, idx}] = cur_context
+        target_forward [{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target
+        target_backward[{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target:index(1, torch.linspace(cur_target:size(1), 1, cur_target:size(1)):long()) -- reverse order
+        answer[idx] = cur_answer
+
+        for aid = 1, max_context_length do
+          if context[aid][idx] == cur_answer then
+            answer_ind[idx][#answer_ind[idx] + 1] = aid
+          end
+        end
+
+        assert(#answer_ind[idx] ~= 0, 'answer must exist in context')
+      end
+    end
+    collectgarbage()
+  end
+end
+
+function loadData(tensor_data, tensor_location, sample, eval_heuristics)
 
   local num_examples = tensor_location:size(1)
   local batches
@@ -140,31 +205,35 @@ function loadData(tensor_data, tensor_location, sample)
             answer_ind[idx][#answer_ind[idx] + 1] = aid
           end
         end
-        
-        local random_answer = cur_context[torch.randperm(cur_context:size(1))[1]]
 
-        local most_likely_answers = tds.hash()
-        local most_likely_count = 0
-        local most_likely_word = 0
-        for i = 1, cur_context:size(1) do
-          if most_likely_answers[cur_context[i]] == nil then
-            most_likely_answers[cur_context[i]] = 1
-          else
-            most_likely_answers[cur_context[i]] = most_likely_answers[cur_context[i]] + 1
+        if eval_heuristics then
+          local random_answer = cur_context[torch.randperm(cur_context:size(1))[1]]
+
+          local most_likely_answers = tds.hash()
+          local most_likely_count = 0
+          local most_likely_word = 0
+          for i = 1, cur_context:size(1) do
+            if puncs[cur_context[i]] == nil and stopwords[cur_context[i]] == nil then
+              if most_likely_answers[cur_context[i]] == nil then
+                most_likely_answers[cur_context[i]] = 1
+              else
+                most_likely_answers[cur_context[i]] = most_likely_answers[cur_context[i]] + 1
+              end
+              if most_likely_count < most_likely_answers[cur_context[i]] then
+                most_likely_count = most_likely_answers[cur_context[i]]
+                most_likely_word = cur_context[i]
+              end
+            end
           end
-          if most_likely_count < most_likely_answers[cur_context[i]] then
-            most_likely_count = most_likely_answers[cur_context[i]]
-            most_likely_word = cur_context[i]
+          num_answers = num_answers + 1
+
+          if most_likely_word == cur_answer then
+            num_correct_likely = num_correct_likely + 1
           end
-        end
-        num_answers = num_answers + 1
 
-        if most_likely_word == cur_answer then
-          num_correct_likely = num_correct_likely + 1
-        end
-
-        if random_answer == cur_answer then
-          num_correct_random = num_correct_random + 1
+          if random_answer == cur_answer then
+            num_correct_random = num_correct_random + 1
+          end
         end
       end
     end
@@ -175,11 +244,15 @@ function loadData(tensor_data, tensor_location, sample)
     answer_inds[#answer_inds + 1] = answer_ind
   end
 
-  print(num_answers)
-  print(num_correct_likely)
-  print(num_correct_random)
-  num_answers:test()
-
+  if eval_heuristics then
+    print('Heuristics accuracy')
+    print('num_answers')
+    print(num_answers)
+    print('num_correct_likely')
+    print(num_correct_likely)
+    print('num_correct_random')
+    print(num_correct_random)
+  end
   -- inddd = 16
   -- print(contexts[inddd][{{},1}]:contiguous():view(1,-1))
   -- print(targets[inddd][1][{{},1}]:contiguous():view(1,-1))
@@ -222,7 +295,7 @@ function test_model()
         local max_word = 0
         for iw = 1, outputs:size(2) do
           local word = inputs[iw][b]
-          if word ~= 0 and puncs[word] == nil then -- ignore punctuation
+          if word ~= 0 and puncs[word] == nil and stopwords[word] == nil then -- ignore punctuations & stop-words
             if word_to_prob[word] == nil then
               word_to_prob[word] = 0
             end
@@ -282,6 +355,11 @@ for i = 1, data.punctuations:size(1) do
   puncs[data.punctuations[i]] = 1
 end
 
+stopwords = tds.hash()
+for i = 1, data.stopwords:size(1) do
+  stopwords[data.stopwords[i]] = 1
+end
+
 vocab_size = data.vocab_size[1]
 
 if #opt.testmodel > 0 then
@@ -290,9 +368,14 @@ if #opt.testmodel > 0 then
   os.exit()
 end
 
--- valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   opt.validsize)
--- contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location, -1)
-tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_location,    -1)
+if opt.unittest then
+  test_answer_in_context(data.train_data,   data.train_location,   -1)
+  test_answer_in_context(data.control_data, data.control_location, -1)
+end
+
+valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   opt.validsize)
+contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location, -1)
+tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_location,    -1, opt.evalheuristics)
 
 if not opt.silent then 
   print("Vocabulary size : "..vocab_size) 
