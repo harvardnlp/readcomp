@@ -43,7 +43,7 @@ cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each r
 -- data
 cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
-cmd:option('--batchsize', 4, 'number of examples per batch')
+cmd:option('--batchsize', 32, 'number of examples per batch')
 cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory where experiment log (includes model) will be saved')
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
 cmd:option('--evalheuristics', false, 'evaluate heuristics approach e.g. random selection from context, most likely')
