@@ -36,7 +36,7 @@ cmd:option('--silent', false, 'don\'t print anything to stdout')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
-cmd:option('--trainsize', 10000, 'number of batches to use per epoch')
+cmd:option('--trainsize', 1000, 'number of batches to use per epoch')
 cmd:option('--validsize', -1, 'number of batches to use per epoch for validation')
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--hiddensize', '{256}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
