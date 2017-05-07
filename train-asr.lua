@@ -43,7 +43,7 @@ cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each r
 -- data
 cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
-cmd:option('--batchsize', 32, 'number of examples per batch')
+cmd:option('--batchsize', 4, 'number of examples per batch')
 cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory where experiment log (includes model) will be saved')
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
 cmd:option('--dontsave', false, 'dont save the model')
@@ -105,6 +105,9 @@ function loadData(tensor_data, tensor_location, sample)
   answers = {}
   answer_inds = {} -- locations of answer in the context
 
+  local num_answers = 0
+  local num_correct_random = 0
+  local num_correct_likely = 0
   for i = 1,num_batches do
     local batch_start = batches[i]
     local max_context_length = tensor_location[batch_start][2]
@@ -137,6 +140,32 @@ function loadData(tensor_data, tensor_location, sample)
             answer_ind[idx][#answer_ind[idx] + 1] = aid
           end
         end
+        
+        local random_answer = cur_context[torch.randperm(cur_context:size(1))[1]]
+
+        local most_likely_answers = tds.hash()
+        local most_likely_count = 0
+        local most_likely_word = 0
+        for i = 1, cur_context:size(1) do
+          if most_likely_answers[cur_context[i]] == nil then
+            most_likely_answers[cur_context[i]] = 1
+          else
+            most_likely_answers[cur_context[i]] = most_likely_answers[cur_context[i]] + 1
+          end
+          if most_likely_count < most_likely_answers[cur_context[i]] then
+            most_likely_count = most_likely_answers[cur_context[i]]
+            most_likely_word = cur_context[i]
+          end
+        end
+        num_answers = num_answers + 1
+
+        if most_likely_word == cur_answer then
+          num_correct_likely = num_correct_likely + 1
+        end
+
+        if random_answer == cur_answer then
+          num_correct_random = num_correct_random + 1
+        end
       end
     end
 
@@ -145,6 +174,11 @@ function loadData(tensor_data, tensor_location, sample)
     answers[#answers + 1] = answer
     answer_inds[#answer_inds + 1] = answer_ind
   end
+
+  print(num_answers)
+  print(num_correct_likely)
+  print(num_correct_random)
+  num_answers:test()
 
   -- inddd = 16
   -- print(contexts[inddd][{{},1}]:contiguous():view(1,-1))
@@ -256,8 +290,8 @@ if #opt.testmodel > 0 then
   os.exit()
 end
 
-valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   opt.validsize)
-contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location, -1)
+-- valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   opt.validsize)
+-- contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location, -1)
 tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_location,    -1)
 
 if not opt.silent then 
