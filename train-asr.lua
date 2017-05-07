@@ -4,6 +4,7 @@ require 'rnn'
 require 'nngraph'
 require 'SeqBRNNP'
 require 'CAddTableBroadcast'
+require 'optim'
 tds = require 'tds'
 local dl = require 'dataload'
 local csv = require 'csv'
@@ -22,6 +23,7 @@ cmd:option('--minlr', 0.00001, 'minimum learning rate')
 cmd:option('--saturate', 400, 'epoch at which linear decayed LR will reach minlr')
 cmd:option('--schedule', '', 'learning rate schedule. e.g. {[5] = 0.004, [6] = 0.001}')
 cmd:option('--momentum', 0.9, 'momentum')
+cmd:option('--adamconfig', '{0, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--maxnormout', -1, 'max l2-norm of each layer\'s output neuron weights')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
 cmd:option('--cuda', false, 'use CUDA')
@@ -38,6 +40,7 @@ cmd:option('--trainsize', 10000, 'number of batches to use per epoch')
 cmd:option('--validsize', -1, 'number of batches to use per epoch for validation')
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--hiddensize', '{256}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
+cmd:option('--rnntype', 'gru', 'type of rnn to use for encoding context and query, acceptable values: rnn/lstm')
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
 cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
@@ -55,6 +58,7 @@ cmd:text()
 local opt = cmd:parse(arg or {})
 opt.hiddensize = loadstring(" return "..opt.hiddensize)()
 opt.schedule = loadstring(" return "..opt.schedule)()
+opt.adamconfig = loadstring(" return "..opt.adamconfig)()
 opt.inputsize = opt.inputsize == -1 and opt.hiddensize[1] or opt.inputsize
 opt.id = opt.id == '' and ('lambada' .. ':' .. dl.uniqueid()) or opt.id
 opt.version = 6 -- better NCE bias initialization + new default hyper-params
@@ -398,7 +402,7 @@ if not lm then
   -- rnn layers
   local inputsize = opt.inputsize
   for i,hiddensize in ipairs(opt.hiddensize) do
-    local brnn = nn.SeqBRNNP(inputsize, hiddensize, opt.projsize, false, nn.JoinTable(3))
+    local brnn = nn.SeqBRNNP(inputsize, hiddensize, opt.rnntype, opt.projsize, false, nn.JoinTable(3))
     brnn:MaskZero(true)
     Yd:add(brnn)
     if opt.dropout > 0 then
@@ -426,14 +430,23 @@ if not lm then
   inputsize = opt.inputsize
   for i,hiddensize in ipairs(opt.hiddensize) do
 
-    local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
-    rnn_forward.maskzero = true
-    lm_query_forward:add(rnn_forward)
+    if opt.rnntype == 'gru' then
+      local rnn_forward =  nn.SeqGRU(inputsize, hiddensize)
+      rnn_forward.maskzero = true
+      lm_query_forward:add(rnn_forward)
 
-    local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
-    rnn_backward.maskzero = true
-    lm_query_backward:add(rnn_backward)
+      local rnn_backward =  opt.projsize < 1 and nn.SeqGRU(inputsize, hiddensize)
+      rnn_backward.maskzero = true
+      lm_query_backward:add(rnn_backward)
+    else
+      local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
+      rnn_forward.maskzero = true
+      lm_query_forward:add(rnn_forward)
 
+      local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
+      rnn_backward.maskzero = true
+      lm_query_backward:add(rnn_backward)
+    end
     if opt.dropout > 0 then
       lm_query_forward:add(nn.Dropout(opt.dropout))
       lm_query_backward:add(nn.Dropout(opt.dropout))
@@ -518,6 +531,8 @@ if opt.trainsize <= 0 or opt.trainsize >= data.train_location:size(1) then
   train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data,   data.train_location,   opt.trainsize)
 end
 
+local params, grad_params = lm:getParameters()
+
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
   print("Epoch #"..epoch.." :")
@@ -541,68 +556,64 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     local inputs = train_con[i]
     local targets = train_tar[i]
     local answer_inds = train_ans_ind[i]
-    -- forward
-    local outputs = lm:forward({inputs, targets})
-    local grad_outputs = torch.zeros(opt.batchsize, outputs:size(2))
 
-    if opt.cuda then
-      grad_outputs = grad_outputs:cuda()
+    local function feval(x)
+       if x ~= params then
+          params:copy(x)
+       end
+       grad_params:zero()
+
+      -- forward
+      local outputs = lm:forward({inputs, targets})
+      local grad_outputs = torch.zeros(opt.batchsize, outputs:size(2))
+
+      if opt.cuda then
+        grad_outputs = grad_outputs:cuda()
+      end
+
+      -- compute attention sum, loss & gradients
+      local err = 0
+      for ib = 1, opt.batchsize do
+        local prob_answer = 0
+        for ians = 1, #answer_inds[ib] do
+          prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
+        end
+        if prob_answer == 0 then
+          print('WARNING: zero cumulative probability assigned to the correct answer at the following indices: ')
+          print(answer_inds[ib])
+        end
+        for ians = 1, #answer_inds[ib] do
+          grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
+        end
+        err = err - torch.log(prob_answer)
+      end
+      sumErr = sumErr + err / opt.batchsize
+
+      -- backward 
+      local a = torch.Timer()
+      lm:zeroGradParameters()
+      lm:backward({inputs, targets}, grad_outputs)
+      
+      -- update
+      if opt.cutoff > 0 then
+        local norm = lm:gradParamClip(opt.cutoff) -- affects gradParams
+        opt.meanNorm = opt.meanNorm and (opt.meanNorm*0.9 + norm*0.1) or norm
+      end
+
+       return err, grad_params
     end
 
-    -- if ir == 3 then
-    --   print('inputs')
-    --   print(inputs[{{}, 1}]:contiguous():view(1,-1))
-    --   print('train_ans[i][1]')
-    --   print(train_ans[i][1])
-    --   print('outputs')
-    --   print(outputs)
-    -- end
-    -- compute attention sum, loss & gradients
-    local err = 0
-    for ib = 1, opt.batchsize do
-      local prob_answer = 0
-      for ians = 1, #answer_inds[ib] do
-        -- if ir == 3 then
-        --   print('answer_inds[ib][ians]')
-        --   print(answer_inds[ib][ians])
-        -- end
-        prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
-      end
-      if prob_answer == 0 then
-        print('WARNING: zero cumulative probability assigned to the correct answer at the following indices: ')
-        print(answer_inds[ib])
-      end
-      for ians = 1, #answer_inds[ib] do
-        grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
-      end
-      -- if ir == 3 then
-      --   print('prob_answer')
-      --   print(prob_answer)
-      --   prob_answer:quit()
-      -- end
-      err = err - torch.log(prob_answer)
-    end
-    sumErr = sumErr + err / opt.batchsize
+    local _, loss = optim.adam(feval, params, adamconfig)
 
-    -- backward 
-    local a = torch.Timer()
-    lm:zeroGradParameters()
-    lm:backward({inputs, targets}, grad_outputs)
-    
-    -- update
-    if opt.cutoff > 0 then
-      local norm = lm:gradParamClip(opt.cutoff) -- affects gradParams
-      opt.meanNorm = opt.meanNorm and (opt.meanNorm*0.9 + norm*0.1) or norm
-    end
-    lm:updateGradParameters(opt.momentum) -- affects gradParams
-    lm:updateParameters(opt.lr) -- affects params
-    lm:maxParamNorm(opt.maxnormout) -- affects params
+    -- lm:updateGradParameters(opt.momentum) -- affects gradParams
+    -- lm:updateParameters(opt.lr) -- affects params
+    -- lm:maxParamNorm(opt.maxnormout) -- affects params
 
     if opt.progress then
       xlua.progress(ir, nbatches)
     end
 
-    if i % 2000 == 0 then
+    if i % 1000 == 0 then
       collectgarbage()
     end
   end

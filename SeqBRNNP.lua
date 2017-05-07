@@ -11,13 +11,18 @@
 ------------------------------------------------------------------------
 local SeqBRNNP, parent = torch.class('nn.SeqBRNNP', 'nn.Container')
 
-function SeqBRNNP:__init(inputDim, hiddenDim, projSize, batchFirst, merge)
-    if projSize > 0 then
-        self.forwardModule  = nn.SeqLSTMP(inputDim, projSize, hiddenDim)
-        self.backwardModule = nn.SeqLSTMP(inputDim, projSize, hiddenDim)
+function SeqBRNNP:__init(inputDim, hiddenDim, rnnType, projSize, batchFirst, merge)
+    if rnnType == 'gru' then
+        self.forwardModule  = nn.SeqGRU(inputDim, hiddenDim)
+        self.backwardModule = nn.SeqGRU(inputDim, hiddenDim)
     else
-        self.forwardModule  = nn.SeqLSTM(inputDim, hiddenDim)
-        self.backwardModule = nn.SeqLSTM(inputDim, hiddenDim)
+        if projSize > 0 then
+            self.forwardModule  = nn.SeqLSTMP(inputDim, projSize, hiddenDim)
+            self.backwardModule = nn.SeqLSTMP(inputDim, projSize, hiddenDim)
+        else
+            self.forwardModule  = nn.SeqLSTM(inputDim, hiddenDim)
+            self.backwardModule = nn.SeqLSTM(inputDim, hiddenDim)
+        end
     end
     self.merge = merge
     if not self.merge then
