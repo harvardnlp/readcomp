@@ -370,7 +370,7 @@ end
 
 if opt.unittest then
   test_answer_in_context(data.train_data,   data.train_location,   -1)
-  test_answer_in_context(data.control_data, data.control_location, -1)
+  test_answer_in_context(data.valid_data, data.valid_location, -1)
 end
 
 valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   opt.validsize)
@@ -567,6 +567,10 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
         --   print(answer_inds[ib][ians])
         -- end
         prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
+      end
+      if prob_answer == 0 then
+        print('WARNING: zero cumulative probability assigned to the correct answer at the following indices: ')
+        print(answer_inds[ib])
       end
       for ians = 1, #answer_inds[ib] do
         grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
