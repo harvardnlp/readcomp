@@ -51,6 +51,7 @@ cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
 cmd:option('--evalheuristics', false, 'evaluate heuristics approach e.g. random selection from context, most likely')
 cmd:option('--dontsave', false, 'dont save the model')
+cmd:option('--verbose', false, 'print verbose diagnostics messages')
 -- unit test
 cmd:option('--unittest', false, 'enable unit tests')
 
@@ -590,6 +591,14 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
         end
       end
       sumErr = sumErr + err / opt.batchsize
+
+      if opt.verbose then
+        print('grad_outputs: min = ' .. grad_outputs:min() .. 
+          ', max = ' .. grad_outputs:max() .. 
+          ', mean = ' .. grad_outputs:mean() .. 
+          ', std = ' .. grad_outputs:std() .. 
+          ', nnz = ' .. grad_outputs[grad_outputs:ne(0)]:size(1) .. ' / ' ..  grad_outputs:numel() .. ' ....................................')
+      end
 
       -- backward 
       local a = torch.Timer()
