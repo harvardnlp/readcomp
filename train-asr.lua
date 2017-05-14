@@ -29,6 +29,7 @@ cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensor
 cmd:option('--cuda', false, 'use CUDA')
 cmd:option('--device', 1, 'sets the device (GPU) to use')
 cmd:option('--profile', false, 'profile updateOutput,updateGradInput and accGradParameters in Sequential')
+cmd:option('--maxbatch', -1, 'maximum number of training batches per epoch')
 cmd:option('--maxepoch', 100, 'maximum number of epochs to run')
 cmd:option('--earlystop', 30, 'maximum number of epochs to wait to find a better local minima for early-stopping')
 cmd:option('--progress', false, 'print progress bar')
@@ -36,22 +37,22 @@ cmd:option('--silent', false, 'don\'t print anything to stdout')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
-cmd:option('--trainsize', 10000, 'number of batches to use per epoch')
-cmd:option('--validsize', -1, 'number of batches to use per epoch for validation')
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
-cmd:option('--hiddensize', '{256}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
+cmd:option('--hiddensize', '{128}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
 cmd:option('--rnntype', 'gru', 'type of rnn to use for encoding context and query, acceptable values: rnn/lstm')
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
 cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
 cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
-cmd:option('--batchsize', 32, 'number of examples per batch')
+cmd:option('--batchsize', 128, 'number of examples per batch')
 cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory where experiment log (includes model) will be saved')
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
 cmd:option('--evalheuristics', false, 'evaluate heuristics approach e.g. random selection from context, most likely')
 cmd:option('--dontsave', false, 'dont save the model')
 cmd:option('--verbose', false, 'print verbose diagnostics messages')
+cmd:option('--randomseed', 1, 'random seed')
+
 -- unit test
 cmd:option('--unittest', false, 'enable unit tests')
 
@@ -66,6 +67,8 @@ opt.version = 6 -- better NCE bias initialization + new default hyper-params
 if not opt.silent then
   table.print(opt)
 end
+
+torch.manualSeed(opt.randomseed)
 
 if opt.cuda then -- do this before building model to prevent segfault
   require 'cunn' 
@@ -152,21 +155,11 @@ function test_answer_in_context(tensor_data, tensor_location, sample)
   end
 end
 
-function loadData(tensor_data, tensor_location, sample, eval_heuristics)
+function loadData(tensor_data, tensor_location, eval_heuristics, batches)
 
   local num_examples = tensor_location:size(1)
-  local batches
-  if sample == -1 then
+  if batches == nil then
     batches = torch.range(1, num_examples, opt.batchsize)
-  else
-    slices = torch.range(1, num_examples, opt.batchsize)
-    randind = torch.randperm(slices:size(1))
-    batches = torch.zeros(sample)
-    for is = 1, sample do
-      batches[is] = slices[randind[is]]
-    end
-    -- sample = math.min(sample, num_examples - opt.batchsize + 1)
-    -- batches = torch.randperm(num_examples - opt.batchsize + 1):sub(1,sample)
   end
   local num_batches = batches:size(1)
 
@@ -368,7 +361,7 @@ end
 vocab_size = data.vocab_size[1]
 
 if #opt.testmodel > 0 then
-  tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_location, -1)
+  tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_location)
   test_model(opt.testmodel)
   os.exit()
 end
@@ -378,9 +371,9 @@ if opt.unittest then
   test_answer_in_context(data.valid_data, data.valid_location, -1)
 end
 
-valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location,   opt.validsize)
-contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location, -1)
-tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_location,    -1, opt.evalheuristics)
+valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_location)
+contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location)
+tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_location, opt.evalheuristics)
 
 if not opt.silent then 
   print("Vocabulary size : "..vocab_size) 
@@ -466,7 +459,8 @@ if not lm then
     :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
     :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
-  Attention = nn.Sequential():add(nn.MM()):add(nn.Squeeze()):add(nn.SoftMax()) -- batch x seqlen
+  Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
+  Attention = nn.SoftMax() -- batch x seqlen
 
   x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
   q_inp = nn.Identity()():annotate({name = 'q', description  = 'query'})
@@ -474,7 +468,8 @@ if not lm then
   nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
   nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
 
-  nng_A = Attention({nng_Yd, nng_U}):annotate({name = 'Attention', description = 'attention on query & context dot-product'})
+  nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
+  nng_A = Attention(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})
   lm = nn.gModule({x_inp, q_inp}, {nng_A})
 
   -- don't remember previous state between batches since
@@ -527,36 +522,43 @@ local ntrial = 0
 local epoch = xplog.epoch+1
 opt.lr = opt.lr or opt.startlr
 
--- load all examples into memory
-if opt.trainsize <= 0 or opt.trainsize >= data.train_location:size(1) then
-  train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data,   data.train_location,   opt.trainsize)
-end
-
 local params, grad_params = lm:getParameters()
 
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
   print("Epoch #"..epoch.." :")
 
-  -- preload training data for a number of samples
-  -- useful when total # of examples is too large to be loaded into memory
-  if opt.trainsize > 0 and opt.trainsize < data.train_location:size(1) then
-    train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data,   data.train_location,   opt.trainsize)
+  local num_examples = data.train_location:size(1)
+  local all_batches = torch.range(1, num_examples, opt.batchsize)
+  local nbatches = all_batches:size(1)
+  local randind = torch.randperm(nbatches)
+  if opt.verbose then
+    print('randind:view(1,-1)')
+    print(randind:view(1,-1))
   end
+
+  local batch = torch.zeros(1)
   -- 1. training
    
-  local a = torch.Timer()
+  print('Total # of batches: ' .. nbatches)
+
   lm:training()
   local sumErr = 0
 
-  local nbatches = #train_con
-  local irand = torch.randperm(nbatches)
-
+  local all_timer = torch.Timer()
+  nbatches = opt.maxbatch == -1 and nbatches or math.min(opt.maxbatch, nbatches)
   for ir = 1,nbatches do
-    local i = irand[ir]
-    local inputs = train_con[i]
-    local targets = train_tar[i]
-    local answer_inds = train_ans_ind[i]
+
+    local a = torch.Timer()
+    batch[1] = all_batches[randind[ir]]
+    train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data, data.train_location, false, batch)
+    if opt.profile then
+      print('Load training batch: ' .. a:time().real .. 's')
+    end
+
+    local inputs = train_con[1]
+    local targets = train_tar[1]
+    local answer_inds = train_ans_ind[1]
 
     local function feval(x)
        if x ~= params then
@@ -566,6 +568,34 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
 
       -- forward
       local outputs = lm:forward({inputs, targets})
+
+
+      if opt.verbose and ir == 1 then
+        print('inputs')
+        print(inputs[{{},2}]:contiguous():view(1,-1))
+        print('targets')
+        print(targets[1][{{},2}]:contiguous():view(1,-1))
+        print(targets[2][{{},2}]:contiguous():view(1,-1))
+        
+        for inode,node in ipairs(lm.forwardnodes) do
+          if node.data.annotations.name == 'Yd' then
+            print(node.data.annotations.name)
+            print(node.data.module.output[{2}])
+            print(node.data.annotations.name)
+          end
+          if node.data.annotations.name == 'u' then
+            print(node.data.annotations.name)
+            print(node.data.module.output:squeeze()[{2}]:view(1,-1))
+            print(node.data.annotations.name)
+          end
+          if node.data.annotations.name == 'Joint' then
+            print(node.data.annotations.name)
+            print(node.data.module.output:squeeze()[{2}]:view(1,-1))
+            print(node.data.annotations.name)
+          end
+        end
+      end
+
       local grad_outputs = torch.zeros(opt.batchsize, outputs:size(2))
 
       if opt.cuda then
@@ -573,6 +603,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
       end
 
       -- compute attention sum, loss & gradients
+      local a = torch.Timer()
       local err = 0
       for ib = 1, opt.batchsize do
         if #answer_inds[ib] > 0 then
@@ -582,13 +613,26 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
           end
           if prob_answer == 0 then
             print('WARNING: zero cumulative probability assigned to the correct answer at the following indices: ')
+
             print(answer_inds[ib])
+            print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]] .. ', ib = ' .. ib)
+            print('inputs')
+            print(inputs[{{}, ib}]:contiguous():view(1,-1))
+            print('targets')
+            print(targets[1][{{}, ib}]:contiguous():view(1,-1))
+            print('outputs')
+            print(outputs[ib]:view(1,-1))
+            
+            outputs:foo() -- intentionally break
           end
           for ians = 1, #answer_inds[ib] do
             grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
           end
           err = err - torch.log(prob_answer)
         end
+      end
+      if opt.profile then
+        print('Compute attention sum: ' .. a:time().real .. 's')
       end
       sumErr = sumErr + err / opt.batchsize
 
@@ -601,7 +645,6 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
       end
 
       -- backward 
-      local a = torch.Timer()
       lm:zeroGradParameters()
       lm:backward({inputs, targets}, grad_outputs)
       
@@ -624,7 +667,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
       xlua.progress(ir, nbatches)
     end
 
-    if i % 1000 == 0 then
+    if ir % 200 == 0 then
       collectgarbage()
     end
   end
@@ -645,8 +688,9 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   end
 
   if cutorch then cutorch.synchronize() end
-  local speed = nbatches*opt.batchsize/a:time().real
-  print(string.format("Speed : %f words/second; %f ms/word", speed, 1000/speed))
+  local secs_per_epoch = all_timer:time().real
+  local speed = nbatches*opt.batchsize/secs_per_epoch
+  print(string.format("Time per epoch: %f s, Speed : %f words/second; %f ms/word", secs_per_epoch, speed, 1000/speed))
 
   local loss = sumErr/nbatches
   print("Training error : "..loss)
