@@ -4,6 +4,7 @@ require 'rnn'
 require 'nngraph'
 require 'SeqBRNNP'
 require 'CAddTableBroadcast'
+require 'ZeroToNegInf'
 require 'optim'
 tds = require 'tds'
 local dl = require 'dataload'
@@ -466,6 +467,7 @@ if not lm then
     :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
   Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
+  IgnoreZero = nn.ZeroToNegInf(true) -- in-place convert 0 to -inf
   Attention = nn.SoftMax() -- batch x seqlen
 
   x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
@@ -475,7 +477,8 @@ if not lm then
   nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
 
   nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-  nng_A = Attention(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})
+  nng_Ignore0 = IgnoreZero(nng_YdU):annotate({name = 'IgnoreZero', description = 'ignore zero in softmax computation'})
+  nng_A = Attention(nng_Ignore0):annotate({name = 'Attention', description = 'attention on query & context dot-product'})
   lm = nn.gModule({x_inp, q_inp}, {nng_A})
 
   -- don't remember previous state between batches since
