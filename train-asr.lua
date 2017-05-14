@@ -333,6 +333,10 @@ function test_model()
     if opt.progress then
       xlua.progress(i, #tests_con)
     end
+
+    if i % 200 == 0 then
+      collectgarbage()
+    end
   end
 
   local accuracy = correct / num_examples
@@ -345,6 +349,8 @@ function test_model()
   local test_result_file = model_file..'.testresult'
   print('Saving test result file to '..test_result_file)
   torch.save(test_result_file, test_result)
+
+  collectgarbage()
 end
 
 data = hdf5.open(opt.datafile, 'r'):all()
@@ -721,6 +727,10 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
 
     if opt.progress then
       xlua.progress(i, nvalbatches)
+    end
+
+    if i % 200 == 0 then
+      collectgarbage()
     end
   end
 
