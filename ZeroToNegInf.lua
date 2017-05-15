@@ -21,11 +21,11 @@ function ZeroToNegInf:updateGradInput(input, gradOutput)
    self.gradInput = self.gradInput or input.new()
    if self.inplace then
       self.gradInput:set(gradOutput)
+      self.gradInput[input:eq(-math.huge)] = 0
    else
       self.gradInput:resizeAs(input):copy(gradOutput)
+      self.gradInput[input:eq(0)] = 0
    end
-
-   self.gradInput[input:eq(0)] = 0
 
    return self.gradInput
 end
