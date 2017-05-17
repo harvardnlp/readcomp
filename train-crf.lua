@@ -339,7 +339,7 @@ function test_model()
       xlua.progress(i, #tests_con)
     end
 
-    if i % 200 == 0 then
+    if i % 50 == 0 then
       collectgarbage()
     end
   end
@@ -470,10 +470,18 @@ if not lm then
     :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
     :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
+  Yd2 = Yd:clone()
+  U2 = U:clone()
+
+  Theta1 = nn.MM() -- batch x seqlen x 1
+  Theta2 = nn.MM() -- batch x seqlen x 1
   Theta = nn.Sequential()
-    :add(nn.MM()) -- batch x seqlen x 1
+    :add(nn.JoinTable(3)) -- batch x seqlen x 2
     :add(nn.SplitTable(1))
-    :add(nn.MapTable():add(nn.Sequential():add(nn.Linear(1,2)):add(nn.Unsqueeze(1))))
+    :add(nn.MapTable()
+      :add(nn.Sequential()
+        :add(nn.LogSoftMax())
+        :add(nn.Unsqueeze(1))))
     :add(nn.JoinTable(1)) -- batch x seqlen x 2
 
   CRF = nn.Sequential():add(nn.NaN(nn.CRF(2))):add(nn.Exp()) -- batch x (seqlen + 1) x 2 x 2
@@ -483,7 +491,7 @@ if not lm then
     :add(nn.Sum(4))
     :add(nn.Select(3,1)) -- batch x seqlen x 1
     :add(nn.Squeeze())
-    :add(nn.SoftMax())
+    :add(nn.Normalize(1))
     :add(nn.Unsqueeze(3)) -- batch x seqlen x 1
 
   O = nn.Sequential()
@@ -504,7 +512,12 @@ if not lm then
   nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
   nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
 
-  nng_Theta = Theta({nng_Yd, nng_U}):annotate({name = 'Theta', description = 'unary potentials'})
+  nng_Yd2 = Yd2(x_inp):annotate({name = 'Yd2', description = 'memory embeddings'})
+  nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
+
+  nng_Theta1 = Theta1({nng_Yd,  nng_U}):annotate({name = 'Theta1', description = 'unary potentials'})
+  nng_Theta2 = Theta2({nng_Yd2, nng_U2}):annotate({name = 'Theta2', description = 'unary potentials'})
+  nng_Theta  = Theta({nng_Theta1, nng_Theta2}):annotate({name = 'Theta', description = 'unary potentials'})
   nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
   nng_NOM = NOM(nng_CRF):annotate({name = 'NOM', description = 'Node marginals at C = 1 for every time step'})
   nng_O = O(x_inp):annotate({name = 'O', description = 'output embeddings for context'})
@@ -575,10 +588,6 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   local all_batches = torch.range(1, num_examples, opt.batchsize)
   local nbatches = all_batches:size(1)
   local randind = torch.randperm(nbatches)
-  if opt.verbose then
-    print('randind:view(1,-1)')
-    print(randind:view(1,-1))
-  end
 
   local batch = torch.zeros(1)
   -- 1. training
@@ -612,30 +621,47 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
       -- forward
       local outputs = lm:forward({inputs, targets})
 
-
-      if opt.verbose and ir == 1 then
-        print('inputs')
-        print(inputs[{{},2}]:contiguous():view(1,-1))
-        print('targets')
-        print(targets[1][{{},2}]:contiguous():view(1,-1))
-        print(targets[2][{{},2}]:contiguous():view(1,-1))
+      if opt.verbose and ir % 10 == 1 then
+        -- print('inputs')
+        -- print(inputs[{{},2}]:contiguous():view(1,-1))
+        -- print('targets')
+        -- print(targets[1][{{},2}]:contiguous():view(1,-1))
+        -- print(targets[2][{{},2}]:contiguous():view(1,-1))
         
         for inode,node in ipairs(lm.forwardnodes) do
-          if node.data.annotations.name == 'Yd' then
-            print(node.data.annotations.name)
-            print(node.data.module.output[{2}])
-            print(node.data.annotations.name)
+          -- if node.data.annotations.name == 'Yd' then
+          --   print(node.data.annotations.name)
+          --   print(node.data.module.output[{2}])
+          --   print(node.data.annotations.name)
+          -- end
+          -- if node.data.annotations.name == 'u' then
+          --   print(node.data.annotations.name)
+          --   print(node.data.module.output:squeeze()[{2}]:view(1,-1))
+          --   print(node.data.annotations.name)
+          -- end
+          -- if node.data.annotations.name == 'Joint' then
+          --   print(node.data.annotations.name)
+          --   print(node.data.module.output:squeeze()[{2}]:view(1,-1))
+          --   print(node.data.annotations.name)
+          -- end
+          if node.data.annotations.name == 'CRF' then
+            local crftheta = node.data.module.output
+            print('crftheta')
+            print(crftheta)
           end
-          if node.data.annotations.name == 'u' then
-            print(node.data.annotations.name)
-            print(node.data.module.output:squeeze()[{2}]:view(1,-1))
-            print(node.data.annotations.name)
+          if node.data.annotations.name == 'Theta' or node.data.annotations.name == 'CRF' then
+            local o = node.data.module.output
+            print(node.data.annotations.name..' min = '..o:min()..', max = '..o:max()..', avg = '..o:mean())
+            -- print(node.data.annotations.name)
+            -- print(node.data.module.output[{{},{},1}])
+            -- print(node.data.module.output[{{},{},2}])
+            -- print(node.data.annotations.name)
           end
-          if node.data.annotations.name == 'Joint' then
-            print(node.data.annotations.name)
-            print(node.data.module.output:squeeze()[{2}]:view(1,-1))
-            print(node.data.annotations.name)
-          end
+          -- if node.data.annotations.name == 'NOM' then
+          --   print(node.data.annotations.name)
+          --   print(node.data.module.output:squeeze())
+          --   print(node.data.annotations.name)
+          -- end
         end
       end
 
@@ -710,7 +736,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
       xlua.progress(ir, nbatches)
     end
 
-    if ir % 200 == 0 then
+    if ir % 50 == 0 then
       collectgarbage()
     end
   end
@@ -766,7 +792,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
       xlua.progress(i, nvalbatches)
     end
 
-    if i % 200 == 0 then
+    if i % 50 == 0 then
       collectgarbage()
     end
   end
