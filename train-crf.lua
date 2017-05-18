@@ -486,25 +486,12 @@ if not lm then
 
   CRF = nn.Sequential():add(nn.NaN(nn.CRF(2))):add(nn.Exp()) -- batch x (seqlen + 1) x 2 x 2
 
-  NOM = nn.Sequential()
+  Attention = nn.Sequential()
     :add(nn.Narrow(2,2,-1))
     :add(nn.Sum(4))
     :add(nn.Select(3,1)) -- batch x seqlen x 1
-    :add(nn.Squeeze())
+    :add(nn.Squeeze()) -- batch x seqlen
     :add(nn.Normalize(1))
-    :add(nn.Unsqueeze(3)) -- batch x seqlen x 1
-
-  O = nn.Sequential()
-    :add(nn.LookupTableMaskZero(vocab_size, inputsize)) -- seqlen x batch x (2 * hiddensize)
-    :add(nn.Transpose({1,2}))
-    :add(nn.Transpose({2,3})) -- batch x (2 * hiddensize) x seqlen
-
-  EO = nn.MM() -- batch x (2 * hiddensize) x 1
-
-  Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze()) -- batch x seqlen x 1
-
-  IgnoreZero = nn.NaN(nn.ZeroToNegInf(true)) -- in-place convert 0 to -inf
-  Attention = nn.SoftMax() -- batch x seqlen
 
   x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
   q_inp = nn.Identity()():annotate({name = 'q', description  = 'query'})
@@ -519,13 +506,7 @@ if not lm then
   nng_Theta2 = Theta2({nng_Yd2, nng_U2}):annotate({name = 'Theta2', description = 'unary potentials'})
   nng_Theta  = Theta({nng_Theta1, nng_Theta2}):annotate({name = 'Theta', description = 'unary potentials'})
   nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
-  nng_NOM = NOM(nng_CRF):annotate({name = 'NOM', description = 'Node marginals at C = 1 for every time step'})
-  nng_O = O(x_inp):annotate({name = 'O', description = 'output embeddings for context'})
-  nng_EO = EO({nng_O, nng_NOM}):annotate({name = 'EO', description = 'annotation function E(O)'})
-
-  nng_YdU = Joint({nng_Yd, nng_EO}):annotate({name = 'Joint', description = 'Yd * E(O)'})
-  nng_Ignore0 = IgnoreZero(nng_YdU):annotate({name = 'IgnoreZero', description = 'ignore zero in softmax computation'})
-  nng_A = Attention(nng_Ignore0):annotate({name = 'Attention', description = 'attention on context tokens'})
+  nng_A = Attention(nng_CRF):annotate({name = 'Attention', description = 'attention on context tokens'})
   lm = nn.gModule({x_inp, q_inp}, {nng_A})
 
   -- don't remember previous state between batches since
