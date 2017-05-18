@@ -480,7 +480,7 @@ if not lm then
     :add(nn.SplitTable(1))
     :add(nn.MapTable()
       :add(nn.Sequential()
-        :add(nn.LogSoftMax())
+        :add(nn.SoftMax())
         :add(nn.Unsqueeze(1))))
     :add(nn.JoinTable(1)) -- batch x seqlen x 2
 
