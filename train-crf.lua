@@ -470,16 +470,26 @@ if not lm then
     :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
     :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
-  Yd2 = Yd:clone()
-  U2 = U:clone()
+  -- Yd2 = Yd:clone()
+  -- U2 = U:clone()
 
-  Theta1 = nn.MM() -- batch x seqlen x 1
-  Theta2 = nn.MM() -- batch x seqlen x 1
+  -- Theta1 = nn.MM() -- batch x seqlen x 1
+  -- Theta2 = nn.MM() -- batch x seqlen x 1
+  -- Theta = nn.Sequential()
+  --   :add(nn.JoinTable(3)) -- batch x seqlen x 2
+  --   :add(nn.SplitTable(1))
+  --   :add(nn.MapTable()
+  --     :add(nn.Sequential()
+  --       :add(nn.SoftMax())
+  --       :add(nn.Unsqueeze(1))))
+  --   :add(nn.JoinTable(1)) -- batch x seqlen x 2
+
   Theta = nn.Sequential()
-    :add(nn.JoinTable(3)) -- batch x seqlen x 2
+    :add(nn.MM()) -- batch x seqlen x 1
     :add(nn.SplitTable(1))
     :add(nn.MapTable()
       :add(nn.Sequential()
+        :add(nn.Linear(1,2))
         :add(nn.SoftMax())
         :add(nn.Unsqueeze(1))))
     :add(nn.JoinTable(1)) -- batch x seqlen x 2
@@ -499,12 +509,12 @@ if not lm then
   nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
   nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
 
-  nng_Yd2 = Yd2(x_inp):annotate({name = 'Yd2', description = 'memory embeddings'})
-  nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
+  -- nng_Yd2 = Yd2(x_inp):annotate({name = 'Yd2', description = 'memory embeddings'})
+  -- nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
 
-  nng_Theta1 = Theta1({nng_Yd,  nng_U}):annotate({name = 'Theta1', description = 'unary potentials'})
-  nng_Theta2 = Theta2({nng_Yd2, nng_U2}):annotate({name = 'Theta2', description = 'unary potentials'})
-  nng_Theta  = Theta({nng_Theta1, nng_Theta2}):annotate({name = 'Theta', description = 'unary potentials'})
+  -- nng_Theta1 = Theta1({nng_Yd,  nng_U}):annotate({name = 'Theta1', description = 'unary potentials'})
+  -- nng_Theta2 = Theta2({nng_Yd2, nng_U2}):annotate({name = 'Theta2', description = 'unary potentials'})
+  nng_Theta  = Theta({nng_Yd, nng_U}):annotate({name = 'Theta', description = 'unary potentials'})
   nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
   nng_A = Attention(nng_CRF):annotate({name = 'Attention', description = 'attention on context tokens'})
   lm = nn.gModule({x_inp, q_inp}, {nng_A})
