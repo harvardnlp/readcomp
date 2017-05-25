@@ -490,7 +490,7 @@ if not lm then
     :add(nn.MapTable()
       :add(nn.Sequential()
         :add(nn.Linear(1,2))
-        :add(nn.Tanh())
+        :add(nn.Sigmoid())
         :add(nn.Unsqueeze(1))))
     :add(nn.JoinTable(1)) -- batch x seqlen x 2
 
