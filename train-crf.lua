@@ -686,7 +686,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
             outputs:foo() -- intentionally break
           end
           for ians = 1, #answer_inds[ib] do
-            grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
+            grad_outputs[ib][answer_inds[ib][ians]] = -1 / prob_answer
           end
           err = err - torch.log(prob_answer)
         end
