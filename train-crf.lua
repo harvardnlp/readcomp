@@ -5,7 +5,6 @@ require 'nngraph'
 require 'SeqBRNNP'
 require 'CAddTableBroadcast'
 require 'ZeroToNegInf'
-require 'MaxNodeMarginal'
 require 'optim'
 require 'crf/Util.lua'
 require 'crf/Markov.lua'
@@ -37,7 +36,7 @@ cmd:option('--device', 1, 'sets the device (GPU) to use')
 cmd:option('--profile', false, 'profile updateOutput,updateGradInput and accGradParameters in Sequential')
 cmd:option('--maxbatch', -1, 'maximum number of training batches per epoch')
 cmd:option('--maxepoch', 10, 'maximum number of epochs to run')
-cmd:option('--earlystop', 5, 'maximum number of epochs to wait to find a better local minima for early-stopping')
+cmd:option('--earlystop', 3, 'maximum number of epochs to wait to find a better local minima for early-stopping')
 cmd:option('--progress', false, 'print progress bar')
 cmd:option('--silent', false, 'don\'t print anything to stdout')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
@@ -348,14 +347,6 @@ function test_model()
   local accuracy = correct / num_examples
   print('Test Accuracy = '..accuracy..' ('..correct..' out of '..num_examples..')')
 
-  if max_test_accuracy == nil or max_test_accuracy < accuracy then
-    max_test_accuracy = accuracy
-    if not opt.dontsave then
-      local filename = paths.concat(opt.savepath, opt.id..'.t7')
-      print("Saving best model to "..filename)
-      torch.save(filename, xplog)
-    end
-  end
   local test_result = {}
   test_result.accuracy = accuracy
   test_result.perplexity = perplexity
@@ -508,9 +499,8 @@ if not lm then
   Attention = nn.Sequential()
     :add(nn.Narrow(2,2,-1))
     :add(nn.Sum(4))
-    :add(nn.SplitTable(3))
-    :add(nn.CDivTable()) -- batch x seqlen
-    -- :add(nn.MaxNodeMarginal()) -- batch x seqlen
+    :add(nn.Select(3,1)) -- batch x seqlen x 1
+    :add(nn.Squeeze()) -- batch x seqlen
     :add(nn.Normalize(1))
 
   x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
@@ -809,7 +799,12 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch 
-    test_model()
+    local filename = paths.concat(opt.savepath, opt.id..'.t7')
+    if not opt.dontsave then
+      print("Found new minima. Saving to "..filename)
+      torch.save(filename, xplog)
+      test_model()
+    end
     ntrial = 0
   elseif ntrial >= opt.earlystop then
     print("No new minima found after "..ntrial.." epochs.")
