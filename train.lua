@@ -520,32 +520,52 @@ if not lm then
     nng_Theta  = Theta({nng_Yd, nng_U}):annotate({name = 'Theta', description = 'unary potentials'})
     nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
     nng_A = Attention(nng_CRF):annotate({name = 'Attention', description = 'attention on context tokens'})
+    lm = nn.gModule({x_inp, q_inp}, {nng_A})
 
   elseif opt.model == 'asr' or opt.model == 'ga' then
 
     Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
-    IgnoreZero = nn.ZeroToNegInf(false) -- convert 0 to -inf
-    Attention = nn.SoftMax() -- batch x seqlen
 
     nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-    nng_Ignore0 = IgnoreZero(nng_YdU):annotate({name = 'IgnoreZero', description = 'ignore zero in softmax computation'})
-    nng_A = Attention(nng_Ignore0):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
+    nng_Ignore0 = nn.ZeroToNegInf(false)(nng_YdU):annotate({name = 'IgnoreZero', description = 'ignore zero in softmax computation'})
+    nng_A = nn.SoftMax()(nng_Ignore0):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
   
-    if opt.model == 'ga' then
+    if opt.model ~= 'ga' then
+      lm = nn.gModule({x_inp, q_inp}, {nng_A})
+    else
       AttentionColumn = nn.Unsqueeze(3) -- batch x seqlen x 1
       URow = nn.Transpose({2,3}) -- batch x 1 x (2 * hiddensize)
-      QHat = nn.MM() -- batch x seqlen x (2 * hiddensize)
-      X = nn.CMulTable() -- batch x seqlen x (2 * hiddensize)
+      QHat = nn.Sequential():add(nn.ParallelTable():add(AttentionColumn):add(URow)):add(nn.MM()) -- batch x seqlen x (2 * hiddensize)
 
-      nng_AColumn = AttentionColumn(nng_A):annotate({name = 'AttentionColumn', description = ''})
-      nng_URow = URow(nng_U):annotate({name = 'URow', description = ''})
-      nng_QHat = QHat({nng_AColumn, nng_URow}):annotate({name = 'QHat', description = ''})
-      nng_X = X({nng_QHat, nng_Yd}):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
-    end
+      nng_QHat = QHat({nng_A, nng_U}):annotate({name = 'QHat', description = ''})
+      nng_X1 = nn.CMulTable()({nng_QHat, nng_Yd}):annotate({name = 'X1', description = 'intermediate document representation at 1st hop'})
 
+      Yd2 = Yd:clone()
+      Yd3 = Yd:clone()
+      U2 = U:clone()
+      U3 = U:clone()
+      QHat2 = QHat:clone()
+
+      Join2 = Joint:clone()
+      Join3 = Joint:clone()
+
+      nng_Yd2 = Yd2(nng_X1):annotate({name = 'Yd2', description = 'memory embeddings'})
+      nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
+      nng_YdU2 = Joint2({nng_Yd2, nng_U2}):annotate({name = 'Joint2', description = 'Yd * U'})
+      nng_Ignore02 = nn.ZeroToNegInf(false)(nng_YdU2):annotate({name = 'IgnoreZero2', description = 'ignore zero in softmax computation'})
+      nng_A2 = nn.SoftMax()(nng_Ignore02):annotate({name = 'Attention2', description = 'attention on query & context dot-product'})    
+      nng_QHat2 = QHat2({nng_A2, nng_U2}):annotate({name = 'QHat2', description = ''})
+      nng_X2 = nn.CMulTable()({nng_QHat2, nng_Yd2}):annotate({name = 'X2', description = 'intermediate document representation at 2nd hop'})
+
+      nng_Yd3 = Yd3(nng_X2):annotate({name = 'Yd3', description = 'memory embeddings'})
+      nng_U3 = U3(q_inp):annotate({name = 'u3', description = 'query embeddings'})
+      nng_YdU3 = Joint3({nng_Yd3, nng_U3}):annotate({name = 'Joint3', description = 'Yd * U'})
+      nng_Ignore03 = nn.ZeroToNegInf(false)(nng_YdU3):annotate({name = 'IgnoreZero3', description = 'ignore zero in softmax computation'})
+      nng_A3 = nn.SoftMax()(nng_Ignore03):annotate({name = 'Attention3', description = 'attention on query & context dot-product'})    
+      
+      lm = nn.gModule({x_inp, q_inp}, {nng_A3})
   end
 
-  lm = nn.gModule({x_inp, q_inp}, {nng_A})
 
   -- don't remember previous state between batches since
   -- every example is entirely contained in a batch
