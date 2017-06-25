@@ -24,6 +24,7 @@ cmd:text("th examples/train.lua --cuda --cutoff 10 --batchsize 128 --seqlen 100 
 cmd:text('Options:')
 -- training
 cmd:option('--model', 'crf', 'type of models to train, acceptable values: {crf, asr ,ga}')
+cmd:option('--gahop', 3, 'number of hops in gated attention model')
 cmd:option('--startlr', 0.001, 'learning rate at t=0')
 cmd:option('--minlr', 0.00001, 'minimum learning rate')
 cmd:option('--saturate', 400, 'epoch at which linear decayed LR will reach minlr')
@@ -520,17 +521,28 @@ if not lm then
     nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
     nng_A = Attention(nng_CRF):annotate({name = 'Attention', description = 'attention on context tokens'})
 
-  elseif opt.model == 'asr' then
+  elseif opt.model == 'asr' or opt.model == 'ga' then
 
     Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
-    IgnoreZero = nn.ZeroToNegInf(true) -- in-place convert 0 to -inf
+    IgnoreZero = nn.ZeroToNegInf(false) -- convert 0 to -inf
     Attention = nn.SoftMax() -- batch x seqlen
 
     nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
     nng_Ignore0 = IgnoreZero(nng_YdU):annotate({name = 'IgnoreZero', description = 'ignore zero in softmax computation'})
     nng_A = Attention(nng_Ignore0):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
   
-  elseif opt.model == 'ga' then
+    if opt.model == 'ga' then
+      AttentionColumn = nn.Unsqueeze(3) -- batch x seqlen x 1
+      URow = nn.Transpose({2,3}) -- batch x 1 x (2 * hiddensize)
+      QHat = nn.MM() -- batch x seqlen x (2 * hiddensize)
+      X = nn.CMulTable() -- batch x seqlen x (2 * hiddensize)
+
+      nng_AColumn = AttentionColumn(nng_A):annotate({name = 'AttentionColumn', description = ''})
+      nng_URow = URow(nng_U):annotate({name = 'URow', description = ''})
+      nng_QHat = QHat({nng_AColumn, nng_URow}):annotate({name = 'QHat', description = ''})
+      nng_X = X({nng_QHat, nng_Yd}):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
+    end
+
   end
 
   lm = nn.gModule({x_inp, q_inp}, {nng_A})
