@@ -663,8 +663,8 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
 
   local all_timer = torch.Timer()
   nbatches = opt.maxbatch == -1 and nbatches or math.min(opt.maxbatch, nbatches)
-  for ir = 1,1 do
-  -- for ir = 1,nbatches do
+  -- for ir = 1,1 do
+  for ir = 1,nbatches do
     local a = torch.Timer()
     batch[1] = all_batches[randind[ir]]
     train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data, data.train_location, false, batch)
@@ -860,8 +860,8 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   local sumErr = 0
 
   local nvalbatches = #valid_con - 1 -- ignore the last batch which contains zero-padded data
-  for i = 1, 1 do
-  -- for i = 1, nvalbatches do
+  -- for i = 1, 1 do
+  for i = 1, nvalbatches do
     local inputs = valid_con[i]
     local targets = valid_tar[i]
     local answer_inds = valid_ans_ind[i]
