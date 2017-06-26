@@ -52,7 +52,7 @@ cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each r
 -- data
 cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
-cmd:option('--batchsize', 128, 'number of examples per batch')
+cmd:option('--batchsize', 64, 'number of examples per batch')
 cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory where experiment log (includes model) will be saved')
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
 cmd:option('--evalheuristics', false, 'evaluate heuristics approach e.g. random selection from context, most likely')
@@ -360,6 +360,88 @@ function test_model()
   collectgarbage()
 end
 
+function build_doc_rnn(use_lookup, in_size)
+  local doc_rnn = nn.Sequential()
+
+  if use_lookup then
+    -- input layer (i.e. word embedding space)
+    lookup = nn.LookupTableMaskZero(vocab_size, in_size)
+    lookup.maxnormout = -1 -- prevent weird maxnormout behaviour
+    doc_rnn:add(lookup) -- input is seqlen x batchsize
+    if opt.dropout > 0 then
+        doc_rnn:add(nn.Dropout(opt.dropout))
+    end
+  end
+  -- rnn layers
+  for i,hiddensize in ipairs(opt.hiddensize) do
+    local brnn = nn.SeqBRNNP(in_size, hiddensize, opt.rnntype, opt.projsize, false, nn.JoinTable(3))
+    brnn:MaskZero(true)
+    doc_rnn:add(brnn)
+    if opt.dropout > 0 then
+      doc_rnn:add(nn.Dropout(opt.dropout))
+    end
+    in_size = 2 * hiddensize
+  end
+  doc_rnn:add(nn.Transpose({1,2})) -- batchsize x seqlen x (2 * hiddensize)
+  return doc_rnn
+end
+
+function build_query_rnn(use_lookup, in_size)
+  -- for query
+  local lm_query_forward  = nn.Sequential()
+  if use_lookup then
+    local lookup_query_forward = lookup:clone('weight', 'gradWeight')
+    lm_query_forward:add(lookup_query_forward) -- input is seqlen x batchsize
+    if opt.dropout > 0 then
+        lm_query_forward:add(nn.Dropout(opt.dropout))
+    end
+  end
+
+  local lm_query_backward = nn.Sequential()
+  if use_lookup then
+    local lookup_query_backward = lookup:clone('weight', 'gradWeight')
+    lm_query_backward:add(lookup_query_backward) -- input is seqlen x batchsize
+    if opt.dropout > 0 then
+        lm_query_backward:add(nn.Dropout(opt.dropout))
+    end
+  end
+
+  for i,hiddensize in ipairs(opt.hiddensize) do
+
+    if opt.rnntype == 'gru' then
+      local rnn_forward =  nn.SeqGRU(in_size, hiddensize)
+      rnn_forward.maskzero = true
+      lm_query_forward:add(rnn_forward)
+
+      local rnn_backward =  opt.projsize < 1 and nn.SeqGRU(in_size, hiddensize)
+      rnn_backward.maskzero = true
+      lm_query_backward:add(rnn_backward)
+    else
+      local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
+      rnn_forward.maskzero = true
+      lm_query_forward:add(rnn_forward)
+
+      local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
+      rnn_backward.maskzero = true
+      lm_query_backward:add(rnn_backward)
+    end
+    if opt.dropout > 0 then
+      lm_query_forward:add(nn.Dropout(opt.dropout))
+      lm_query_backward:add(nn.Dropout(opt.dropout))
+    end
+
+    in_size = hiddensize
+  end
+
+  lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
+  lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
+
+  return nn.Sequential()
+    :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
+    :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
+    :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
+end
+
 data = hdf5.open(opt.datafile, 'r'):all()
 puncs = tds.hash()
 for i = 1, data.punctuations:size(1) do
@@ -388,6 +470,10 @@ valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   dat
 contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_location)
 tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_location, opt.evalheuristics)
 
+if data.word_embeddings then
+  opt.inputsize = data.word_embeddings:size(2)
+end
+
 if not opt.silent then 
   print("Vocabulary size : "..vocab_size) 
   print("Using batch size of "..opt.batchsize)
@@ -396,84 +482,11 @@ end
 --[[ language model ]]--
 
 if not lm then
-  Yd = nn.Sequential()
-
-  -- input layer (i.e. word embedding space)
-  local lookup = nn.LookupTableMaskZero(vocab_size, opt.inputsize)
-  lookup.maxnormout = -1 -- prevent weird maxnormout behaviour
-  Yd:add(lookup) -- input is seqlen x batchsize
-  if opt.dropout > 0 then
-      Yd:add(nn.Dropout(opt.dropout))
-  end
-
-  -- rnn layers
-  local inputsize = opt.inputsize
-  for i,hiddensize in ipairs(opt.hiddensize) do
-    local brnn = nn.SeqBRNNP(inputsize, hiddensize, opt.rnntype, opt.projsize, false, nn.JoinTable(3))
-    brnn:MaskZero(true)
-    Yd:add(brnn)
-    if opt.dropout > 0 then
-      Yd:add(nn.Dropout(opt.dropout))
-    end
-    inputsize = 2 * hiddensize
-  end
-  Yd:add(nn.Transpose({1,2})) -- batchsize x seqlen x (2 * hiddensize)
-
-  -- for query
-  lm_query_forward  = nn.Sequential()
-  local lookup_query_forward = lookup:clone('weight', 'gradWeight')
-  lm_query_forward:add(lookup_query_forward) -- input is seqlen x batchsize
-  if opt.dropout > 0 then
-      lm_query_forward:add(nn.Dropout(opt.dropout))
-  end
-
-  lm_query_backward = nn.Sequential()
-  local lookup_query_backward = lookup:clone('weight', 'gradWeight')
-  lm_query_backward:add(lookup_query_backward) -- input is seqlen x batchsize
-  if opt.dropout > 0 then
-      lm_query_backward:add(nn.Dropout(opt.dropout))
-  end
-
-  inputsize = opt.inputsize
-  for i,hiddensize in ipairs(opt.hiddensize) do
-
-    if opt.rnntype == 'gru' then
-      local rnn_forward =  nn.SeqGRU(inputsize, hiddensize)
-      rnn_forward.maskzero = true
-      lm_query_forward:add(rnn_forward)
-
-      local rnn_backward =  opt.projsize < 1 and nn.SeqGRU(inputsize, hiddensize)
-      rnn_backward.maskzero = true
-      lm_query_backward:add(rnn_backward)
-    else
-      local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
-      rnn_forward.maskzero = true
-      lm_query_forward:add(rnn_forward)
-
-      local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(inputsize, hiddensize) or nn.SeqLSTMP(inputsize, opt.projsize, hiddensize)
-      rnn_backward.maskzero = true
-      lm_query_backward:add(rnn_backward)
-    end
-    if opt.dropout > 0 then
-      lm_query_forward:add(nn.Dropout(opt.dropout))
-      lm_query_backward:add(nn.Dropout(opt.dropout))
-    end
-
-    inputsize = hiddensize
-  end
-
-  lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
-  lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
-
-  inputsize = 2 * inputsize
-
-  U = nn.Sequential()
-    :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
-    :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
-    :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
+  Yd = build_doc_rnn(true, opt.inputsize)
+  U = build_query_rnn(true, opt.inputsize)
 
   x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
-  q_inp = nn.Identity()():annotate({name = 'q', description  = 'query'})
+  q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
 
   nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
   nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
@@ -527,7 +540,7 @@ if not lm then
     Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
 
     nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-    nng_Ignore0 = nn.ZeroToNegInf(false)(nng_YdU):annotate({name = 'IgnoreZero', description = 'ignore zero in softmax computation'})
+    nng_Ignore0 = nn.ZeroToNegInf()(nng_YdU):annotate({name = 'IgnoreZero', description = 'ignore zero in softmax computation'})
     nng_A = nn.SoftMax()(nng_Ignore0):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
   
     if opt.model ~= 'ga' then
@@ -540,19 +553,22 @@ if not lm then
       nng_QHat = QHat({nng_A, nng_U}):annotate({name = 'QHat', description = ''})
       nng_X1 = nn.CMulTable()({nng_QHat, nng_Yd}):annotate({name = 'X1', description = 'intermediate document representation at 1st hop'})
 
-      Yd2 = Yd:clone()
-      Yd3 = Yd:clone()
-      U2 = U:clone()
-      U3 = U:clone()
+      Yd2 = build_doc_rnn(false, 2 * opt.hiddensize[1])
+      Yd2 = nn.Sequential():add(nn.Transpose({1,2})):add(Yd2)
+      Yd3 = Yd2:clone()
+
+      U2  = U:clone()
+      U3  = U:clone()
+
       QHat2 = QHat:clone()
 
-      Join2 = Joint:clone()
-      Join3 = Joint:clone()
+      Joint2 = Joint:clone()
+      Joint3 = Joint:clone()
 
       nng_Yd2 = Yd2(nng_X1):annotate({name = 'Yd2', description = 'memory embeddings'})
       nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
       nng_YdU2 = Joint2({nng_Yd2, nng_U2}):annotate({name = 'Joint2', description = 'Yd * U'})
-      nng_Ignore02 = nn.ZeroToNegInf(false)(nng_YdU2):annotate({name = 'IgnoreZero2', description = 'ignore zero in softmax computation'})
+      nng_Ignore02 = nn.ZeroToNegInf()(nng_YdU2):annotate({name = 'IgnoreZero2', description = 'ignore zero in softmax computation'})
       nng_A2 = nn.SoftMax()(nng_Ignore02):annotate({name = 'Attention2', description = 'attention on query & context dot-product'})    
       nng_QHat2 = QHat2({nng_A2, nng_U2}):annotate({name = 'QHat2', description = ''})
       nng_X2 = nn.CMulTable()({nng_QHat2, nng_Yd2}):annotate({name = 'X2', description = 'intermediate document representation at 2nd hop'})
@@ -560,12 +576,12 @@ if not lm then
       nng_Yd3 = Yd3(nng_X2):annotate({name = 'Yd3', description = 'memory embeddings'})
       nng_U3 = U3(q_inp):annotate({name = 'u3', description = 'query embeddings'})
       nng_YdU3 = Joint3({nng_Yd3, nng_U3}):annotate({name = 'Joint3', description = 'Yd * U'})
-      nng_Ignore03 = nn.ZeroToNegInf(false)(nng_YdU3):annotate({name = 'IgnoreZero3', description = 'ignore zero in softmax computation'})
+      nng_Ignore03 = nn.ZeroToNegInf()(nng_YdU3):annotate({name = 'IgnoreZero3', description = 'ignore zero in softmax computation'})
       nng_A3 = nn.SoftMax()(nng_Ignore03):annotate({name = 'Attention3', description = 'attention on query & context dot-product'})    
       
       lm = nn.gModule({x_inp, q_inp}, {nng_A3})
+    end
   end
-
 
   -- don't remember previous state between batches since
   -- every example is entirely contained in a batch
@@ -576,6 +592,15 @@ if not lm then
       param:uniform(-opt.uniform, opt.uniform)
     end
   end
+
+  -- load pretrained embeddings
+  -- IMPORTANT: must do this after random param initialization
+  if data.word_embeddings then
+    local pretrained_vocab_size = data.word_embeddings:size(1)
+    print('Using pre-trained Glove word embeddings')
+    lookup.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
+  end
+
 end
 
 if opt.profile then
@@ -638,8 +663,8 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
 
   local all_timer = torch.Timer()
   nbatches = opt.maxbatch == -1 and nbatches or math.min(opt.maxbatch, nbatches)
-  for ir = 1,nbatches do
-
+  for ir = 1,1 do
+  -- for ir = 1,nbatches do
     local a = torch.Timer()
     batch[1] = all_batches[randind[ir]]
     train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data, data.train_location, false, batch)
@@ -750,6 +775,30 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
           ', mean = ' .. grad_outputs:mean() .. 
           ', std = ' .. grad_outputs:std() .. 
           ', nnz = ' .. grad_outputs[grad_outputs:ne(0)]:size(1) .. ' / ' ..  grad_outputs:numel() .. ' ....................................')
+
+        if grad_outputs:mean() ~= grad_outputs:mean() then -- nan value
+          print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]])
+          print('inputs')
+          print(inputs)
+          print('targets')
+          print(targets[1])
+          print(targets[2])
+          print('outputs')
+          print(outputs)
+
+          for inode,node in ipairs(lm.forwardnodes) do
+            if node.data.annotations.name == 'IgnoreZero' then
+              print('IgnoreZero')
+              print(node.data.module.output)
+            end
+            if node.data.annotations.name == 'Attention' then
+              print('Attention')
+              print(node.data.module.output)
+            end
+          end
+
+          outputs:foo() -- intentionally break
+        end
       end
 
       -- backward 
@@ -811,8 +860,8 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   local sumErr = 0
 
   local nvalbatches = #valid_con - 1 -- ignore the last batch which contains zero-padded data
-  -- for i = 1, 1 do
-  for i = 1, nvalbatches do
+  for i = 1, 1 do
+  -- for i = 1, nvalbatches do
     local inputs = valid_con[i]
     local targets = valid_tar[i]
     local answer_inds = valid_ans_ind[i]

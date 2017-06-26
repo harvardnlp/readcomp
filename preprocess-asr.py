@@ -16,7 +16,7 @@ import re
 args = {}
 
 end_words  = { "?", "??", "???", "!", "!!", "!!!", ".", "?!", "!?" }
-
+GLOVE_DIM = 100
 
 # Preprocessing: split each training example from the dataset https://arxiv.org/abs/1610.08431 into context and target pairs.
 
@@ -65,7 +65,10 @@ class Corpus(object):
     self.dictify()
 
   def __init__(self, vocab_file, punc_file, stop_word_file):
-    self.dictify(vocab_file, punc_file, stop_word_file)
+    self.dictify(vocab_file, None, None, punc_file, stop_word_file)
+
+  def __init__(self, glove_file, glove_size, punc_file, stop_word_file):
+    self.dictify(None, glove_file, glove_size, punc_file, stop_word_file)
 
   def dictify(self):
     self.dictionary = Dictionary()
@@ -73,17 +76,32 @@ class Corpus(object):
     self.dictionary.add_word('<sep>') # map to 0 for masked rnn
     self.dictionary.add_word('<unk>')
 
-  def dictify(self, vocab_file, punc_file, stop_word_file):
+
+  def dictify(self, vocab_file, glove_file, glove_size, punc_file, stop_word_file):
     self.dictionary = Dictionary()
     self.punctuations = []
     self.stopwords = []
     self.dictionary.add_word('<sep>') # map to 0 for masked rnn
     self.dictionary.add_word('<unk>')
 
-    with open(vocab_file, 'r') as f:
-      for line in f:
-        if line.strip():
-          self.dictionary.add_word(line.strip())
+    if vocab_file != None:
+      with open(vocab_file, 'r') as f:
+        for line in f:
+          if line.strip():
+            self.dictionary.add_word(line.strip())
+    elif glove_file != None:
+      self.embeddings = [np.zeros(GLOVE_DIM) for _ in range(len(self.dictionary))]
+      with codecs.open(glove_file, "r", encoding="utf-8") as gf:
+        num_glove = 0
+        for line in gf:
+          tokens = line.split(' ')
+          self.dictionary.add_word(tokens[0])
+          self.embeddings.append(np.array(tokens[1:]).astype(float))
+          num_glove += 1
+          if num_glove == glove_size:
+            break
+    else:
+      raise Exception('Either vocab file or glove file must be specified.')
 
     with open(punc_file, 'r') as f:
       for line in f:
@@ -247,6 +265,10 @@ def main(arguments):
       formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument('--data', type=str, default='/mnt/c/Users/lhoang/Dropbox/Personal/Work/lambada-dataset/lambada-train-valid/original/',
                       help='location of the data corpus')
+  parser.add_argument('--glove', type=str, default='', # e.g. data/glove.6B.100d.txt
+                      help='absolute path of the glove embedding file')
+  parser.add_argument('--glove_size', type=int, default=-1,
+                      help='size of the vocab to build from glove embeddings')
   parser.add_argument('--train', type=str, default='train.txt',
                       help='relative location (file or folder) of training data')
   parser.add_argument('--valid', type=str, default='valid.txt',
@@ -271,7 +293,10 @@ def main(arguments):
   # get embeddings
   # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
 
-  corpus = Corpus(args.data + args.vocab, args.data + args.punctuations, args.data + args.stopwords)
+  if len(args.glove) > 0:
+    corpus = Corpus(args.glove, args.glove_size, args.data + args.punctuations, args.data + args.stopwords)
+  else:
+    corpus = Corpus(args.data + args.vocab, args.data + args.punctuations, args.data + args.stopwords)
   if len(args.debug_translate) > 0:
     debug_translate(corpus.dictionary.idx2word, args.debug_translate)
   else:
@@ -292,6 +317,9 @@ def main(arguments):
 
       f['control_data']     = np.array(corpus.control['data'])
       f['control_location'] = np.array(corpus.control['location'])
+
+      if corpus.embeddings != None:
+        f['word_embeddings'] = np.array(corpus.embeddings)
 
 
 if __name__ == '__main__':
