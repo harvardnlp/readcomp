@@ -90,7 +90,7 @@ class Corpus(object):
           if line.strip():
             self.dictionary.add_word(line.strip())
     elif glove_file != None:
-      self.embeddings = [np.zeros(GLOVE_DIM) for _ in range(len(self.dictionary))]
+      self.embeddings = [np.random.rand(GLOVE_DIM) * 0.1 for _ in range(len(self.dictionary))]
       with codecs.open(glove_file, "r", encoding="utf-8") as gf:
         num_glove = 0
         for line in gf:

@@ -4,7 +4,6 @@ require 'rnn'
 require 'nngraph'
 require 'SeqBRNNP'
 require 'CAddTableBroadcast'
-require 'ZeroToNegInf'
 require 'optim'
 require 'crf/Util.lua'
 require 'crf/Markov.lua'
@@ -540,8 +539,7 @@ if not lm then
     Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
 
     nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-    nng_Ignore0 = nn.ZeroToNegInf()(nng_YdU):annotate({name = 'IgnoreZero', description = 'ignore zero in softmax computation'})
-    nng_A = nn.SoftMax()(nng_Ignore0):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
+    nng_A = nn.SoftMax()(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
   
     if opt.model ~= 'ga' then
       lm = nn.gModule({x_inp, q_inp}, {nng_A})
@@ -568,16 +566,14 @@ if not lm then
       nng_Yd2 = Yd2(nng_X1):annotate({name = 'Yd2', description = 'memory embeddings'})
       nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
       nng_YdU2 = Joint2({nng_Yd2, nng_U2}):annotate({name = 'Joint2', description = 'Yd * U'})
-      nng_Ignore02 = nn.ZeroToNegInf()(nng_YdU2):annotate({name = 'IgnoreZero2', description = 'ignore zero in softmax computation'})
-      nng_A2 = nn.SoftMax()(nng_Ignore02):annotate({name = 'Attention2', description = 'attention on query & context dot-product'})    
+      nng_A2 = nn.SoftMax()(nng_YdU2):annotate({name = 'Attention2', description = 'attention on query & context dot-product'})    
       nng_QHat2 = QHat2({nng_A2, nng_U2}):annotate({name = 'QHat2', description = ''})
       nng_X2 = nn.CMulTable()({nng_QHat2, nng_Yd2}):annotate({name = 'X2', description = 'intermediate document representation at 2nd hop'})
 
       nng_Yd3 = Yd3(nng_X2):annotate({name = 'Yd3', description = 'memory embeddings'})
       nng_U3 = U3(q_inp):annotate({name = 'u3', description = 'query embeddings'})
       nng_YdU3 = Joint3({nng_Yd3, nng_U3}):annotate({name = 'Joint3', description = 'Yd * U'})
-      nng_Ignore03 = nn.ZeroToNegInf()(nng_YdU3):annotate({name = 'IgnoreZero3', description = 'ignore zero in softmax computation'})
-      nng_A3 = nn.SoftMax()(nng_Ignore03):annotate({name = 'Attention3', description = 'attention on query & context dot-product'})    
+      nng_A3 = nn.SoftMax()(nng_YdU3):annotate({name = 'Attention3', description = 'attention on query & context dot-product'})    
       
       lm = nn.gModule({x_inp, q_inp}, {nng_A3})
     end
