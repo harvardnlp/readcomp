@@ -824,7 +824,9 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
       collectgarbage()
     end
   end
-   
+  
+  collectgarbage()
+
    -- learning rate decay
   if opt.schedule then
     opt.lr = opt.schedule[epoch] or opt.lr
@@ -880,6 +882,8 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
       collectgarbage()
     end
   end
+
+  collectgarbage()
 
   local validloss = sumErr/nvalbatches
   print("Validation error : "..validloss)
