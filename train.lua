@@ -436,6 +436,7 @@ function build_doc_rnn(use_lookup, in_size, in_pref_size, in_suff_size, in_post_
         doc_rnn:add(nn.Dropout(opt.dropout))
     end
   end
+  in_size = in_size + in_pref_size + in_suff_size + in_post_size + extr_size
   -- rnn layers
   for i,hiddensize in ipairs(opt.hiddensize) do
     -- expects input of size seqlen x batchsize x hiddensize
@@ -552,7 +553,7 @@ end
 
 if not lm then
   Yd = build_doc_rnn(true, opt.inputsize, opt.prefsize, opt.suffsize, opt.postsize)
-  U = build_query_rnn(true, opt.inputsize)
+  U = build_query_rnn(true, opt.inputsize + opt.prefsize + opt.suffsize + opt.postsize + extr_size)
 
   x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
   q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
