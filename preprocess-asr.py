@@ -531,6 +531,9 @@ def main(arguments):
       f['punctuations']     = np.array(corpus.punctuations) # punctuations are ignored during test time
       f['stopwords']        = np.array(corpus.stopwords) # punctuations are ignored during test time
       f['vocab_size']       = np.array([len(corpus.dictionary)])
+      f['pref_vocab_size']  = np.array([len(corpus.dictionary.pref2idx)])
+      f['suff_vocab_size']  = np.array([len(corpus.dictionary.suff2idx)])
+      f['post_vocab_size']  = np.array([len(corpus.dictionary.post2idx)])
 
       f['train_data']       = np.array(corpus.train['data'])
       f['train_pref']       = np.array(corpus.train['pref'])
