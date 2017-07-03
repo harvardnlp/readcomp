@@ -346,7 +346,7 @@ function test_model()
         local max_prob = 0
         local max_word = 0
         for iw = 1, outputs:size(2) do
-          local word = inputs[iw][b]
+          local word = inputs[1][1][iw][b]
           if word ~= 0 and puncs[word] == nil and stopwords[word] == nil then -- ignore punctuations & stop-words
             if word_to_prob[word] == nil then
               word_to_prob[word] = 0
@@ -553,7 +553,7 @@ end
 
 if not lm then
   Yd = build_doc_rnn(true, opt.inputsize, opt.prefsize, opt.suffsize, opt.postsize)
-  U = build_query_rnn(true, opt.inputsize + opt.prefsize + opt.suffsize + opt.postsize + extr_size)
+  U = build_query_rnn(true, opt.inputsize + opt.prefsize + opt.suffsize + opt.postsize)
 
   x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
   q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
