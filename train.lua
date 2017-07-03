@@ -664,7 +664,7 @@ if not lm then
   if data.word_embeddings then
     local pretrained_vocab_size = data.word_embeddings:size(1)
     print('Using pre-trained Glove word embeddings')
-    lookup.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
+    lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
   end
 
 end
