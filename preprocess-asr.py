@@ -13,6 +13,7 @@ import glob, os, fnmatch
 import csv
 import re
 import nltk
+import time
 
 args = {}
 
@@ -510,6 +511,7 @@ def main(arguments):
   # get embeddings
   # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
 
+  start_time = time.time()
   if len(args.debug_translate) or args.validate:
     corpus = Corpus(None, None, None, None, None)
     corpus.load_vocab(args.out_vocab_file_prefix)
@@ -560,7 +562,8 @@ def main(arguments):
 
       if corpus.embeddings != None:
         f['word_embeddings'] = np.array(corpus.embeddings)
-
+  end_time = time.time()
+  print_msg('Total elapsed time = {}s'.format(str(end_time - start_time)), verbose_level = 1)
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))
