@@ -98,9 +98,6 @@ if opt.continue ~= '' then
   assert(opt)
 end
 
---[[ data set ]]--
-
-
 function test_answer_in_context(tensor_data, tensor_location, sample)
 
   print('Verify that answer is in context')
@@ -508,213 +505,143 @@ function build_query_rnn(use_lookup, in_size)
     :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 end
 
-data = hdf5.open(opt.datafile, 'r'):all()
-puncs = tds.hash()
-for i = 1, data.punctuations:size(1) do
-  puncs[data.punctuations[i]] = 1
-end
+function build_model()
 
-stopwords = tds.hash()
-for i = 1, data.stopwords:size(1) do
-  stopwords[data.stopwords[i]] = 1
-end
+  if not lm then
+    Yd = build_doc_rnn(true, opt.inputsize, opt.prefsize, opt.suffsize, opt.postsize)
+    U = build_query_rnn(true, opt.inputsize + opt.prefsize + opt.suffsize + opt.postsize)
 
-vocab_size = data.vocab_size[1]
-pref_vocab_size = data.pref_vocab_size[1]
-suff_vocab_size = data.suff_vocab_size[1]
-post_vocab_size = data.post_vocab_size[1]
-extr_size = data.train_extr:size(2)
+    x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
+    q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
 
-if #opt.testmodel > 0 then
-  tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_pref, data.test_suff, data.test_post, data.test_extr, data.test_location)
-  test_model(opt.testmodel)
-  os.exit()
-end
+    nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+    nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
 
-if opt.unittest then
-  test_answer_in_context(data.train_data, data.train_location, -1)
-  test_answer_in_context(data.valid_data, data.valid_location, -1)
-end
+    if opt.model == 'crf' then
+      -- Yd2 = Yd:clone()
+      -- U2 = U:clone()
 
-valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_pref,   data.valid_suff,   data.valid_post,   data.valid_extr,   data.valid_location)
-contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_pref, data.control_suff, data.control_post, data.control_extr, data.control_location)
-tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_pref,    data.test_suff,    data.test_post,    data.test_extr,    data.test_location, opt.evalheuristics)
+      -- Theta1 = nn.MM() -- batch x seqlen x 1
+      -- Theta2 = nn.MM() -- batch x seqlen x 1
+      -- Theta = nn.Sequential()
+      --   :add(nn.JoinTable(3)) -- batch x seqlen x 2
+      --   :add(nn.SplitTable(1))
+      --   :add(nn.MapTable()
+      --     :add(nn.Sequential()
+      --       :add(nn.SoftMax())
+      --       :add(nn.Unsqueeze(1))))
+      --   :add(nn.JoinTable(1)) -- batch x seqlen x 2
 
-if data.word_embeddings then
-  opt.inputsize = data.word_embeddings:size(2)
-end
+      Theta = nn.Sequential()
+        :add(nn.MM()) -- batch x seqlen x 1
+        :add(nn.SplitTable(1))
+        :add(nn.MapTable()
+          :add(nn.Sequential()
+            :add(nn.Linear(1,2))
+            :add(nn.Tanh())
+            :add(nn.Unsqueeze(1))))
+        :add(nn.JoinTable(1)) -- batch x seqlen x 2
 
-if not opt.silent then 
-  print("Vocabulary size : "..vocab_size) 
-  print("Using batch size of "..opt.batchsize)
-end
+      CRF = nn.Sequential():add(nn.NaN(nn.CRF(2))):add(nn.Exp()) -- batch x (seqlen + 1) x 2 x 2
 
---[[ language model ]]--
+      Attention = nn.Sequential()
+        :add(nn.Narrow(2,2,-1))
+        :add(nn.Sum(4))
+        :add(nn.Select(3,1)) -- batch x seqlen x 1
+        :add(nn.Squeeze()) -- batch x seqlen
+        :add(nn.Normalize(1))
 
-if not lm then
-  Yd = build_doc_rnn(true, opt.inputsize, opt.prefsize, opt.suffsize, opt.postsize)
-  U = build_query_rnn(true, opt.inputsize + opt.prefsize + opt.suffsize + opt.postsize)
+      -- nng_Yd2 = Yd2(x_inp):annotate({name = 'Yd2', description = 'memory embeddings'})
+      -- nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
 
-  x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
-  q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
-
-  nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
-  nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
-
-  if opt.model == 'crf' then
-    -- Yd2 = Yd:clone()
-    -- U2 = U:clone()
-
-    -- Theta1 = nn.MM() -- batch x seqlen x 1
-    -- Theta2 = nn.MM() -- batch x seqlen x 1
-    -- Theta = nn.Sequential()
-    --   :add(nn.JoinTable(3)) -- batch x seqlen x 2
-    --   :add(nn.SplitTable(1))
-    --   :add(nn.MapTable()
-    --     :add(nn.Sequential()
-    --       :add(nn.SoftMax())
-    --       :add(nn.Unsqueeze(1))))
-    --   :add(nn.JoinTable(1)) -- batch x seqlen x 2
-
-    Theta = nn.Sequential()
-      :add(nn.MM()) -- batch x seqlen x 1
-      :add(nn.SplitTable(1))
-      :add(nn.MapTable()
-        :add(nn.Sequential()
-          :add(nn.Linear(1,2))
-          :add(nn.Tanh())
-          :add(nn.Unsqueeze(1))))
-      :add(nn.JoinTable(1)) -- batch x seqlen x 2
-
-    CRF = nn.Sequential():add(nn.NaN(nn.CRF(2))):add(nn.Exp()) -- batch x (seqlen + 1) x 2 x 2
-
-    Attention = nn.Sequential()
-      :add(nn.Narrow(2,2,-1))
-      :add(nn.Sum(4))
-      :add(nn.Select(3,1)) -- batch x seqlen x 1
-      :add(nn.Squeeze()) -- batch x seqlen
-      :add(nn.Normalize(1))
-
-    -- nng_Yd2 = Yd2(x_inp):annotate({name = 'Yd2', description = 'memory embeddings'})
-    -- nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
-
-    -- nng_Theta1 = Theta1({nng_Yd,  nng_U}):annotate({name = 'Theta1', description = 'unary potentials'})
-    -- nng_Theta2 = Theta2({nng_Yd2, nng_U2}):annotate({name = 'Theta2', description = 'unary potentials'})
-    nng_Theta  = Theta({nng_Yd, nng_U}):annotate({name = 'Theta', description = 'unary potentials'})
-    nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
-    nng_A = Attention(nng_CRF):annotate({name = 'Attention', description = 'attention on context tokens'})
-    lm = nn.gModule({x_inp, q_inp}, {nng_A})
-
-  elseif opt.model == 'asr' or opt.model == 'ga' then
-
-    Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
-
-    nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-    nng_A = nn.SoftMax()(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
-  
-    if opt.model ~= 'ga' then
+      -- nng_Theta1 = Theta1({nng_Yd,  nng_U}):annotate({name = 'Theta1', description = 'unary potentials'})
+      -- nng_Theta2 = Theta2({nng_Yd2, nng_U2}):annotate({name = 'Theta2', description = 'unary potentials'})
+      nng_Theta  = Theta({nng_Yd, nng_U}):annotate({name = 'Theta', description = 'unary potentials'})
+      nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
+      nng_A = Attention(nng_CRF):annotate({name = 'Attention', description = 'attention on context tokens'})
       lm = nn.gModule({x_inp, q_inp}, {nng_A})
-    else
-      AttentionColumn = nn.Unsqueeze(3) -- batch x seqlen x 1
-      URow = nn.Transpose({2,3}) -- batch x 1 x (2 * hiddensize)
-      QHat = nn.Sequential():add(nn.ParallelTable():add(AttentionColumn):add(URow)):add(nn.MM()) -- batch x seqlen x (2 * hiddensize)
 
-      nng_QHat = QHat({nng_A, nng_U}):annotate({name = 'QHat', description = ''})
-      nng_X1 = nn.CMulTable()({nng_QHat, nng_Yd}):annotate({name = 'X1', description = 'intermediate document representation at 1st hop'})
+    elseif opt.model == 'asr' or opt.model == 'ga' then
 
-      Yd2 = build_doc_rnn(false, 2 * opt.hiddensize[1])
-      Yd2 = nn.Sequential():add(nn.Transpose({1,2})):add(Yd2)
-      Yd3 = Yd2:clone()
+      Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
 
-      U2  = U:clone()
-      U3  = U:clone()
+      nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
+      nng_A = nn.SoftMax()(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
+    
+      if opt.model ~= 'ga' then
+        lm = nn.gModule({x_inp, q_inp}, {nng_A})
+      else
+        AttentionColumn = nn.Unsqueeze(3) -- batch x seqlen x 1
+        URow = nn.Transpose({2,3}) -- batch x 1 x (2 * hiddensize)
+        QHat = nn.Sequential():add(nn.ParallelTable():add(AttentionColumn):add(URow)):add(nn.MM()) -- batch x seqlen x (2 * hiddensize)
 
-      QHat2 = QHat:clone()
+        nng_QHat = QHat({nng_A, nng_U}):annotate({name = 'QHat', description = ''})
+        nng_X1 = nn.CMulTable()({nng_QHat, nng_Yd}):annotate({name = 'X1', description = 'intermediate document representation at 1st hop'})
 
-      Joint2 = Joint:clone()
-      Joint3 = Joint:clone()
+        Yd2 = build_doc_rnn(false, 2 * opt.hiddensize[1])
+        Yd2 = nn.Sequential():add(nn.Transpose({1,2})):add(Yd2)
+        Yd3 = Yd2:clone()
 
-      nng_Yd2 = Yd2(nng_X1):annotate({name = 'Yd2', description = 'memory embeddings'})
-      nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
-      nng_YdU2 = Joint2({nng_Yd2, nng_U2}):annotate({name = 'Joint2', description = 'Yd * U'})
-      nng_A2 = nn.SoftMax()(nng_YdU2):annotate({name = 'Attention2', description = 'attention on query & context dot-product'})    
-      nng_QHat2 = QHat2({nng_A2, nng_U2}):annotate({name = 'QHat2', description = ''})
-      nng_X2 = nn.CMulTable()({nng_QHat2, nng_Yd2}):annotate({name = 'X2', description = 'intermediate document representation at 2nd hop'})
+        U2  = U:clone()
+        U3  = U:clone()
 
-      nng_Yd3 = Yd3(nng_X2):annotate({name = 'Yd3', description = 'memory embeddings'})
-      nng_U3 = U3(q_inp):annotate({name = 'u3', description = 'query embeddings'})
-      nng_YdU3 = Joint3({nng_Yd3, nng_U3}):annotate({name = 'Joint3', description = 'Yd * U'})
-      nng_A3 = nn.SoftMax()(nng_YdU3):annotate({name = 'Attention3', description = 'attention on query & context dot-product'})    
-      
-      lm = nn.gModule({x_inp, q_inp}, {nng_A3})
+        QHat2 = QHat:clone()
+
+        Joint2 = Joint:clone()
+        Joint3 = Joint:clone()
+
+        nng_Yd2 = Yd2(nng_X1):annotate({name = 'Yd2', description = 'memory embeddings'})
+        nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
+        nng_YdU2 = Joint2({nng_Yd2, nng_U2}):annotate({name = 'Joint2', description = 'Yd * U'})
+        nng_A2 = nn.SoftMax()(nng_YdU2):annotate({name = 'Attention2', description = 'attention on query & context dot-product'})    
+        nng_QHat2 = QHat2({nng_A2, nng_U2}):annotate({name = 'QHat2', description = ''})
+        nng_X2 = nn.CMulTable()({nng_QHat2, nng_Yd2}):annotate({name = 'X2', description = 'intermediate document representation at 2nd hop'})
+
+        nng_Yd3 = Yd3(nng_X2):annotate({name = 'Yd3', description = 'memory embeddings'})
+        nng_U3 = U3(q_inp):annotate({name = 'u3', description = 'query embeddings'})
+        nng_YdU3 = Joint3({nng_Yd3, nng_U3}):annotate({name = 'Joint3', description = 'Yd * U'})
+        nng_A3 = nn.SoftMax()(nng_YdU3):annotate({name = 'Attention3', description = 'attention on query & context dot-product'})    
+        
+        lm = nn.gModule({x_inp, q_inp}, {nng_A3})
+      end
+    end
+
+    -- don't remember previous state between batches since
+    -- every example is entirely contained in a batch
+    lm:remember('neither')
+
+    if opt.uniform > 0 then
+      for k,param in ipairs(lm:parameters()) do
+        param:uniform(-opt.uniform, opt.uniform)
+      end
+    end
+
+    -- load pretrained embeddings
+    -- IMPORTANT: must do this after random param initialization
+    if data.word_embeddings then
+      local pretrained_vocab_size = data.word_embeddings:size(1)
+      print('Using pre-trained Glove word embeddings')
+      lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
     end
   end
 
-  -- don't remember previous state between batches since
-  -- every example is entirely contained in a batch
-  lm:remember('neither')
-
-  if opt.uniform > 0 then
-    for k,param in ipairs(lm:parameters()) do
-      param:uniform(-opt.uniform, opt.uniform)
-    end
+  if opt.profile then
+    lm:profile()
   end
 
-  -- load pretrained embeddings
-  -- IMPORTANT: must do this after random param initialization
-  if data.word_embeddings then
-    local pretrained_vocab_size = data.word_embeddings:size(1)
-    print('Using pre-trained Glove word embeddings')
-    lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
+  if not opt.silent then
+    print"Language Model:"
+    print(lm)
   end
 
+  --[[ CUDA ]]--
+
+  if opt.cuda then
+    lm:cuda()
+  end
 end
 
-if opt.profile then
-  lm:profile()
-end
-
-if not opt.silent then
-  print"Language Model:"
-  print(lm)
-end
-
---[[ CUDA ]]--
-
-if opt.cuda then
-  lm:cuda()
-end
-
---[[ experiment log ]]--
-
--- is saved to file every time a new validation minima is found
-if not xplog then
-  xplog = {}
-  xplog.opt = opt -- save all hyper-parameters and such
-  xplog.puncs = puncs
-  xplog.dataset = 'Lambada'
-  -- will only serialize params
-  xplog.model = nn.Serial(lm)
-  xplog.model:mediumSerial()
-  -- keep a log of NLL for each epoch
-  xplog.trainloss = {}
-  xplog.valloss = {}
-  -- will be used for early-stopping
-  xplog.minvalloss = 99999999
-  xplog.epoch = 0
-  paths.mkdir(opt.savepath)
-end
-local ntrial = 0
-
-local epoch = xplog.epoch+1
-opt.lr = opt.lr or opt.startlr
-
-local params, grad_params = lm:getParameters()
-
-while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
-  print("")
-  print("Epoch #"..epoch.." :")
-
+function train(params, grad_params, epoch)
   local num_examples = data.train_location:size(1)
   local all_batches = torch.range(1, num_examples, opt.batchsize)
   local nbatches = all_batches:size(1)
@@ -922,9 +849,9 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("Training error : "..loss)
 
   xplog.trainloss[epoch] = loss
+end
 
-  -- 2. cross-validation
-
+function validate(ntrial, epoch)
   lm:evaluate()
   local sumErr = 0
 
@@ -982,6 +909,85 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   end
 
   collectgarbage()
+end
+
+-- Driver code
+data = hdf5.open(opt.datafile, 'r'):all()
+puncs = tds.hash()
+for i = 1, data.punctuations:size(1) do
+  puncs[data.punctuations[i]] = 1
+end
+
+stopwords = tds.hash()
+for i = 1, data.stopwords:size(1) do
+  stopwords[data.stopwords[i]] = 1
+end
+
+vocab_size = data.vocab_size[1]
+pref_vocab_size = data.pref_vocab_size[1]
+suff_vocab_size = data.suff_vocab_size[1]
+post_vocab_size = data.post_vocab_size[1]
+extr_size = data.train_extr:size(2)
+
+if #opt.testmodel > 0 then
+  tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_pref, data.test_suff, data.test_post, data.test_extr, data.test_location)
+  test_model(opt.testmodel)
+  os.exit()
+end
+
+if opt.unittest then
+  test_answer_in_context(data.train_data, data.train_location, -1)
+  test_answer_in_context(data.valid_data, data.valid_location, -1)
+end
+
+valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_pref,   data.valid_suff,   data.valid_post,   data.valid_extr,   data.valid_location)
+contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_pref, data.control_suff, data.control_post, data.control_extr, data.control_location)
+tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_pref,    data.test_suff,    data.test_post,    data.test_extr,    data.test_location, opt.evalheuristics)
+
+if data.word_embeddings then
+  opt.inputsize = data.word_embeddings:size(2)
+end
+
+if not opt.silent then 
+  print("Vocabulary size : "..vocab_size) 
+  print("Using batch size of "..opt.batchsize)
+end
+
+build_model()
+
+--[[ experiment log ]]--
+
+-- is saved to file every time a new validation minima is found
+if not xplog then
+  xplog = {}
+  xplog.opt = opt -- save all hyper-parameters and such
+  xplog.puncs = puncs
+  xplog.dataset = 'Lambada'
+  -- will only serialize params
+  xplog.model = nn.Serial(lm)
+  xplog.model:mediumSerial()
+  -- keep a log of NLL for each epoch
+  xplog.trainloss = {}
+  xplog.valloss = {}
+  -- will be used for early-stopping
+  xplog.minvalloss = 99999999
+  xplog.epoch = 0
+  paths.mkdir(opt.savepath)
+end
+local ntrial = 0
+
+local epoch = xplog.epoch+1
+opt.lr = opt.lr or opt.startlr
+
+local params, grad_params = lm:getParameters()
+
+while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
+  print("")
+  print("Epoch #"..epoch.." :")
+
+  train(params, grad_params, epoch)
+  validate(ntrial, epoch)
+
   epoch = epoch + 1
 end
 
