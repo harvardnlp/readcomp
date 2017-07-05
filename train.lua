@@ -104,7 +104,7 @@ function collect_track_garbage()
   local memory_message = string.format("CPU mem: %.2f Mb", collectgarbage('count') / 1000)
   if opt.cuda then
     freeMemory, totalMemory = cutorch.getMemoryUsage(opt.device)
-    memory_message = memory_message + string.format(", GPU mem: %.2f free / %.2f total (Mb)", freeMemory / 1048576, totalMemory / 1048576)
+    memory_message = memory_message .. string.format(", GPU mem: %.2f free / %.2f total (Mb)", freeMemory / 1048576, totalMemory / 1048576)
   end
   print(memory_message)
 end
