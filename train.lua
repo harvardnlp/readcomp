@@ -37,6 +37,7 @@ cmd:option('--device', 1, 'sets the device (GPU) to use')
 cmd:option('--profile', false, 'profile updateOutput,updateGradInput and accGradParameters in Sequential')
 cmd:option('--maxbatch', -1, 'maximum number of training batches per epoch')
 cmd:option('--maxepoch', 10, 'maximum number of epochs to run')
+cmd:option('--gcepoch', 100, 'specify #-epoch interval to perform garbage collection')
 cmd:option('--maxseqlen', 1024, 'maximum sequence length for context and target')
 cmd:option('--earlystop', 5, 'maximum number of epochs to wait to find a better local minima for early-stopping')
 cmd:option('--progress', false, 'print progress bar')
@@ -388,7 +389,7 @@ function test_model()
       xlua.progress(i, #tests_con)
     end
 
-    if i % 50 == 0 then
+    if i % opt.gcepoch == 0 then
       collect_track_garbage()
     end
   end
@@ -815,7 +816,7 @@ function train(params, grad_params, epoch)
       xlua.progress(ir, nbatches)
     end
 
-    if ir % 50 == 0 then
+    if ir % opt.gcepoch == 0 then
       collect_track_garbage()
     end
   end
@@ -878,7 +879,7 @@ function validate(ntrial, epoch)
       xlua.progress(i, nvalbatches)
     end
 
-    if i % 50 == 0 then
+    if i % opt.gcepoch == 0 then
       collect_track_garbage()
     end
   end
