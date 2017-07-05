@@ -328,12 +328,20 @@ function test_model()
   model:forget()
   model:evaluate()
 
+
+  local all_batches = torch.range(1, data.test_location:size(1), opt.batchsize)
+  local ntestbatches = all_batches:size(1)
+  local batch = torch.zeros(1)
+
   local correct = 0
   local num_examples = 0
-  for i = 1,#tests_con do
-    local inputs = tests_con[i]
-    local targets = tests_tar[i]
-    local answer = tests_ans[i]
+  for i = 1, ntestbatches do
+    batch[1] = all_batches[i]
+    local tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_pref, data.test_suff, data.test_post, data.test_extr, data.test_location, false, batch)
+
+    local inputs = tests_con[1]
+    local targets = tests_tar[1]
+    local answer = tests_ans[1]
     local outputs = model:forward({inputs, targets})
 
     -- compute attention sum for each word in the context, except for punctuation symbols
@@ -661,7 +669,7 @@ function train(params, grad_params, epoch)
   for ir = 1,nbatches do
     local a = torch.Timer()
     batch[1] = all_batches[randind[ir]]
-    train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data, data.train_pref, data.train_suff, data.train_post, data.train_extr, data.train_location, false, batch)
+    local train_con, train_tar, train_ans, train_ans_ind = loadData(data.train_data, data.train_pref, data.train_suff, data.train_post, data.train_extr, data.train_location, false, batch)
     if opt.profile then
       print('Load training batch: ' .. a:time().real .. 's')
     end
@@ -852,15 +860,22 @@ function train(params, grad_params, epoch)
 end
 
 function validate(ntrial, epoch)
+  local num_examples = data.valid_location:size(1)
+  local all_batches = torch.range(1, num_examples, opt.batchsize)
+  local nvalbatches = all_batches:size(1) - 1 -- ignore the last batch which contains zero-padded data
+  local batch = torch.zeros(1)
+
   lm:evaluate()
   local sumErr = 0
 
-  local nvalbatches = #valid_con - 1 -- ignore the last batch which contains zero-padded data
   -- for i = 1, 1 do
   for i = 1, nvalbatches do
-    local inputs = valid_con[i]
-    local targets = valid_tar[i]
-    local answer_inds = valid_ans_ind[i]
+    batch[1] = all_batches[i]
+    local valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data, data.valid_pref, data.valid_suff, data.valid_post, data.valid_extr, data.valid_location, false, batch)
+
+    local inputs = valid_con[1]
+    local targets = valid_tar[1]
+    local answer_inds = valid_ans_ind[1]
     local outputs = lm:forward({inputs, targets})
     local err = 0
     for ib = 1, opt.batchsize do
@@ -930,7 +945,6 @@ post_vocab_size = data.post_vocab_size[1]
 extr_size = data.train_extr:size(2)
 
 if #opt.testmodel > 0 then
-  tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_pref, data.test_suff, data.test_post, data.test_extr, data.test_location)
   test_model(opt.testmodel)
   os.exit()
 end
@@ -939,10 +953,6 @@ if opt.unittest then
   test_answer_in_context(data.train_data, data.train_location, -1)
   test_answer_in_context(data.valid_data, data.valid_location, -1)
 end
-
-valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data,   data.valid_pref,   data.valid_suff,   data.valid_post,   data.valid_extr,   data.valid_location)
-contr_con, contr_tar, contr_ans, contr_ans_ind = loadData(data.control_data, data.control_pref, data.control_suff, data.control_post, data.control_extr, data.control_location)
-tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data,    data.test_pref,    data.test_suff,    data.test_post,    data.test_extr,    data.test_location, opt.evalheuristics)
 
 if data.word_embeddings then
   opt.inputsize = data.word_embeddings:size(2)
