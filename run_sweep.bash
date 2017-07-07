@@ -22,6 +22,8 @@ fi
 
 OUTDIR="sweep-$SWEEP"
 OUTFILE = "$OUTDIR/$OUTDIR-output.console"
+echo "Using output file " $OUTFILE
+
 if [ -e $OUTFILE ]; then
   echo "Output file " $OUTFILE " already exists, quitting."
   exit
