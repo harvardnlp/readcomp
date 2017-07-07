@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $1 == "-h" ]; then
-  echo "Syntax::sh scriptname output-file num-epochs codefile"
+  echo "Syntax::sh scriptname output-file num-epochs codefile gpu-id"
   exit
 fi
 
@@ -34,14 +34,21 @@ else
   codefile=$3
 fi
 
-gpuid=1
+if [ -z $4 ]; then
+  echo "gpu device not specified, using 1"
+  gpu=1
+else
+  gpu=$4
+fi
+
+gpuid=0
 class=("asr")
 seed=(7)
 batch=(64)
-embed=(128)
+embed=(128 58 200)
 adam=("{0, 0.999}")
-cutoff=(10 5)
-post=(80)
+cutoff=(10)
+post=(80 65 70 75)
 extra=""
 for cls in "${class[@]}"; do
   for rs in "${seed[@]}"; do
@@ -50,8 +57,11 @@ for cls in "${class[@]}"; do
         for ad in "${adam[@]}"; do
           for c in "${cutoff[@]}"; do
             for pst in "${post[@]}"; do
-              printf "iteration = $t: th $codefile -classifier $cls -N $N -startlr $eta -D0 $d0 -save -saveminacc 0.35 $extra\n" >> $OUTFILE
-              th $codefile --cuda --device $gpuid --progress --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig $ad --hiddensize {$d0} --postsize $pst --cutoff $c $extra >> $OUTFILE
+              gpuid=$((gpuid % 2 + 1))
+              if [ $gpuid -eq $gpu ] then
+                printf "iteration = $t: th $codefile --cuda --device $gpuid --progress --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig $ad --hiddensize {$d0} --postsize $pst --cutoff $c $extra\n" >> $OUTFILE
+                th $codefile --cuda --device $gpuid --progress --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig $ad --hiddensize {$d0} --postsize $pst --cutoff $c $extra >> $OUTFILE
+              fi
             done
           done
         done

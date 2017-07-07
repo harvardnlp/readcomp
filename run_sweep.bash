@@ -1,26 +1,32 @@
 #!/bin/bash
 
 if [ $1 == "-h" ]; then
-  echo "Syntax::sh scriptname output-file num-epochs"
+  echo "Syntax::sh scriptname sweep-name num-epochs num-gpus"
   exit
 fi
 
 # check outputfile
 if [ -z $1 ]; then
-  echo "Output file not specified. Using 'output.console' "
-  OUTFILE="output.console"
+  echo "Sweep name not specified. Using 'default' "
+  SWEEP="default"
 else
-  OUTFILE=$1
+  SWEEP=$1
 fi
 
-OUTDIR="sweep-$OUTFILE"
-OUTFILE = "$OUTDIR/$OUTFILE"
+if [ -z $3 ]; then
+  echo "Number of gpus not specified. Using 1 "
+  NUMGPU=1
+else
+  NUMGPU=$3
+fi
+
+OUTDIR="sweep-$SWEEP"
+OUTFILE = "$OUTDIR/$OUTDIR-output.console"
 if [ -e $OUTFILE ]; then
   echo "Output file " $OUTFILE " already exists, quitting."
   exit
 fi
 echo "Output File = " $OUTFILE
-
 
 codefile="train.lua"
 echo "Code file = " $codefile
@@ -30,4 +36,7 @@ mkdir $OUTDIR
 cp sweep.bash $OUTDIR/
 cp $codefile $OUTDIR/
 
-bash $OUTDIR/sweep.bash $OUTFILE "$2" "$OUTDIR/$codefile"
+for i in {1..$NUMGPU} do
+	bash $OUTDIR/sweep.bash "$OUTFILE.$i" "$2" "$OUTDIR/$codefile" $i &
+done
+wait
