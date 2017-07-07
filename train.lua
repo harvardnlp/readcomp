@@ -18,19 +18,12 @@ cmd = torch.CmdLine()
 cmd:text()
 cmd:text('Train on LAMBADA dataset')
 cmd:text('Example:')
-cmd:text("th train.lua --progress --earlystop 50 --cuda --device 2 --seqlen 20 --hiddensize '{200,200}' --batchsize 20 --startlr 1 --uniform 0.1 --cutoff 5 --schedule '{[5]=0.5,[6]=0.25,[7]=0.125,[8]=0.0625,[9]=0.03125,[10]=0.015625,[11]=0.0078125,[12]=0.00390625}'")
-cmd:text("th examples/train.lua --cuda --cutoff 10 --batchsize 128 --seqlen 100 --hiddensize '{250,250}' --progress --device 2")
+cmd:text("th train.lua --progress --earlystop 50 --cuda --device 2 --maxseqlen 1024 --hiddensize '{200,200}' --batchsize 20 --uniform 0.1 --cutoff 5")
 cmd:text('Options:')
 -- training
 cmd:option('--model', 'crf', 'type of models to train, acceptable values: {crf, asr ,ga}')
 cmd:option('--gahop', 3, 'number of hops in gated attention model')
-cmd:option('--startlr', 0.001, 'learning rate at t=0')
-cmd:option('--minlr', 0.00001, 'minimum learning rate')
-cmd:option('--saturate', 400, 'epoch at which linear decayed LR will reach minlr')
-cmd:option('--schedule', '', 'learning rate schedule. e.g. {[5] = 0.004, [6] = 0.001}')
-cmd:option('--momentum', 0.9, 'momentum')
 cmd:option('--adamconfig', '{0, 0.999}', 'ADAM hyperparameters beta1 and beta2')
-cmd:option('--maxnormout', -1, 'max l2-norm of each layer\'s output neuron weights')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
 cmd:option('--cuda', false, 'use CUDA')
 cmd:option('--device', 1, 'sets the device (GPU) to use')
@@ -70,7 +63,6 @@ cmd:option('--unittest', false, 'enable unit tests')
 cmd:text()
 local opt = cmd:parse(arg or {})
 opt.hiddensize = loadstring(" return "..opt.hiddensize)()
-opt.schedule = loadstring(" return "..opt.schedule)()
 opt.adamconfig = loadstring(" return "..opt.adamconfig)()
 opt.inputsize = opt.inputsize == -1 and opt.hiddensize[1] or opt.inputsize
 opt.id = opt.id == '' and ('lambada' .. ':' .. dl.uniqueid()) or opt.id
@@ -807,10 +799,6 @@ function train(params, grad_params, epoch)
 
     local _, loss = optim.adam(feval, params, opt.adamconfig)
 
-    -- lm:updateGradParameters(opt.momentum) -- affects gradParams
-    -- lm:updateParameters(opt.lr) -- affects params
-    -- lm:maxParamNorm(opt.maxnormout) -- affects params
-
     if opt.progress then
       xlua.progress(ir, nbatches)
     end
@@ -822,16 +810,7 @@ function train(params, grad_params, epoch)
   
   collect_track_garbage()
 
-   -- learning rate decay
-  if opt.schedule then
-    opt.lr = opt.schedule[epoch] or opt.lr
-  else
-    opt.lr = opt.lr + (opt.minlr - opt.startlr)/opt.saturate
-  end
-  opt.lr = math.max(opt.minlr, opt.lr)
-   
   if not opt.silent then
-    print("learning rate", opt.lr)
     if opt.meanNorm then
       print("mean gradParam norm", opt.meanNorm)
     end
@@ -974,8 +953,6 @@ end
 local ntrial = 0
 
 local epoch = xplog.epoch+1
-opt.lr = opt.lr or opt.startlr
-
 local params, grad_params = lm:getParameters()
 
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
