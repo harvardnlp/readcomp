@@ -39,8 +39,6 @@ cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution b
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
-cmd:option('--prefsize', 20, 'size of prefix embeddings')
-cmd:option('--suffsize', 20, 'size of suffix embeddings')
 cmd:option('--postsize', 20, 'size of pos_tag embeddings')
 cmd:option('--hiddensize', '{128}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
 cmd:option('--rnntype', 'gru', 'type of rnn to use for encoding context and query, acceptable values: rnn/lstm')
@@ -168,26 +166,20 @@ end
 function allocate_data(max_context_length, max_target_length, batchsize)
   -- optimization: pre-allocate tensors and resize/reset when appropriate
   context      = context      and context     :resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
-  context_pref = context_pref and context_pref:resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
-  context_suff = context_suff and context_suff:resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
   context_post = context_post and context_post:resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
   context_extr = context_extr and context_extr:resize(max_context_length, opt.batchsize, extr_size):zero() or torch.LongTensor(max_context_length, opt.batchsize, extr_size):zero()
 
   target_forward      = target_forward      and target_forward     :resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
-  target_forward_pref = target_forward_pref and target_forward_pref:resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
-  target_forward_suff = target_forward_suff and target_forward_suff:resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
   target_forward_post = target_forward_post and target_forward_post:resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
 
   target_backward      = target_backward      and target_backward     :resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
-  target_backward_pref = target_backward_pref and target_backward_pref:resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
-  target_backward_suff = target_backward_suff and target_backward_suff:resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
   target_backward_post = target_backward_post and target_backward_post:resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
 
   answer = answer and answer:resize(opt.batchsize):zero() or torch.LongTensor(opt.batchsize):zero()
 end
 
-function loadData(tensor_data, tensor_pref, tensor_suff, tensor_post, tensor_extr, tensor_location, eval_heuristics, batch_index)
-  -- prefix, suffix and pos_tags are features for both context and target
+function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_heuristics, batch_index)
+  -- pos_tags are features for both context and target
   -- extra features only apply to context (e.g. frequency of token in context)
   local num_examples = tensor_location:size(1)
   local num_answers = 0
@@ -211,15 +203,11 @@ function loadData(tensor_data, tensor_pref, tensor_suff, tensor_post, tensor_ext
 
       local offset_end_context = cur_offset + cur_context_length
       local cur_context      = tensor_data[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_pref = tensor_pref[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_suff = tensor_suff[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
       local cur_context_post = tensor_post[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
       local cur_context_extr = tensor_extr[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}] -- cur_context_length x extr_size
 
       local offset_end_target = cur_offset + cur_context_length + cur_target_length
       local cur_target      = tensor_data[{{offset_end_target - cur_capped_target_length, offset_end_target - 2}}]
-      local cur_target_pref = tensor_pref[{{offset_end_target - cur_capped_target_length, offset_end_target - 2}}]
-      local cur_target_suff = tensor_suff[{{offset_end_target - cur_capped_target_length, offset_end_target - 2}}]
       local cur_target_post = tensor_post[{{offset_end_target - cur_capped_target_length, offset_end_target - 2}}]
 
       local cur_answer  = tensor_data[offset_end_target - 1]
@@ -228,19 +216,11 @@ function loadData(tensor_data, tensor_pref, tensor_suff, tensor_post, tensor_ext
       local target_size  = cur_target:size(1)
 
       context[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context
-      context_pref[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_pref
-      context_suff[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_suff
       context_post[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_post
       context_extr[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_extr
 
       target_forward [{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target
       target_backward[{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target:index(1, torch.linspace(target_size, 1, target_size):long()) -- reverse order
-
-      target_forward_pref [{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target_pref
-      target_backward_pref[{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target_pref:index(1, torch.linspace(target_size, 1, target_size):long()) -- reverse order
-
-      target_forward_suff [{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target_suff
-      target_backward_suff[{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target_suff:index(1, torch.linspace(target_size, 1, target_size):long()) -- reverse order
 
       target_forward_post [{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target_post
       target_backward_post[{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target_post:index(1, torch.linspace(target_size, 1, target_size):long()) -- reverse order
@@ -294,10 +274,10 @@ function loadData(tensor_data, tensor_pref, tensor_suff, tensor_post, tensor_ext
     print(num_correct_random)
   end
 
-  contexts = { {context, context_pref, context_suff, context_post}, context_extr}
+  contexts = { {context, context_post}, context_extr}
   targets = {
-    {target_forward,  target_forward_pref,  target_forward_suff,  target_forward_post }, 
-    {target_backward, target_backward_pref, target_backward_suff, target_backward_post}
+    {target_forward,  target_forward_post }, 
+    {target_backward, target_backward_post}
   }
   return contexts, targets, answer, answer_ind
 end
@@ -325,7 +305,7 @@ function test_model()
   local correct = 0
   local num_examples = 0
   for i = 1, ntestbatches do
-    local tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_pref, data.test_suff, data.test_post, data.test_extr, data.test_location, false, all_batches[i])
+    local tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_post, data.test_extr, data.test_location, false, all_batches[i])
 
     local inputs = tests_con
     local targets = tests_tar
@@ -400,36 +380,32 @@ function test_model()
   collect_track_garbage()
 end
 
-function build_doc_rnn(use_lookup, in_size, in_pref_size, in_suff_size, in_post_size)
+function build_doc_rnn(use_lookup, in_size, in_post_size)
   local doc_rnn = nn.Sequential()
 
   if use_lookup then
     -- input layer (i.e. word embedding space)
     -- input is seqlen x batchsize, output is seqlen x batchsize x insize
     lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
-    lookup_pref = nn.LookupTableMaskZero(pref_vocab_size, in_pref_size)
-    lookup_suff = nn.LookupTableMaskZero(suff_vocab_size, in_suff_size)
     lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
 
     lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
-    lookup_pref.maxnormout = -1
-    lookup_suff.maxnormout = -1
     lookup_post.maxnormout = -1
 
     lookup = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup_text):add(lookup_pref):add(lookup_suff):add(lookup_post))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_pref_size + in_suff_size + in_post_size)
+      :add(nn.ParallelTable():add(lookup_text):add(lookup_post))
+      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
 
     featurizer = nn.Sequential()
       :add(nn.ParallelTable():add(lookup):add(nn.Identity()))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_pref_size + in_suff_size + in_post_size + extr_size)
+      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
 
     doc_rnn:add(featurizer)
     if opt.dropout > 0 then
         doc_rnn:add(nn.Dropout(opt.dropout))
     end
   end
-  in_size = in_size + in_pref_size + in_suff_size + in_post_size + extr_size
+  in_size = in_size + in_post_size + extr_size
   -- rnn layers
   for i,hiddensize in ipairs(opt.hiddensize) do
     -- expects input of size seqlen x batchsize x hiddensize
@@ -504,8 +480,8 @@ end
 function build_model()
 
   if not lm then
-    Yd = build_doc_rnn(true, opt.inputsize, opt.prefsize, opt.suffsize, opt.postsize)
-    U = build_query_rnn(true, opt.inputsize + opt.prefsize + opt.suffsize + opt.postsize)
+    Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
+    U = build_query_rnn(true, opt.inputsize + opt.postsize)
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
@@ -654,7 +630,7 @@ function train(params, grad_params, epoch)
   -- for ir = 1,1 do
   for ir = 1,nbatches do
     local a = torch.Timer()
-    local inputs, targets, answers, answer_inds = loadData(data.train_data, data.train_pref, data.train_suff, data.train_post, data.train_extr, data.train_location, false, all_batches[randind[ir]])
+    local inputs, targets, answers, answer_inds = loadData(data.train_data, data.train_post, data.train_extr, data.train_location, false, all_batches[randind[ir]])
     if opt.profile then
       print('Load training batch: ' .. a:time().real .. 's')
     end
@@ -837,7 +813,7 @@ function validate(ntrial, epoch)
 
   -- for i = 1, 1 do
   for i = 1, nvalbatches do
-    local valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data, data.valid_pref, data.valid_suff, data.valid_post, data.valid_extr, data.valid_location, false, all_batches[i])
+    local valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data, data.valid_post, data.valid_extr, data.valid_location, false, all_batches[i])
 
     local inputs = valid_con
     local targets = valid_tar
@@ -905,8 +881,6 @@ for i = 1, data.stopwords:size(1) do
 end
 
 vocab_size = data.vocab_size[1]
-pref_vocab_size = data.pref_vocab_size[1]
-suff_vocab_size = data.suff_vocab_size[1]
 post_vocab_size = data.post_vocab_size[1]
 extr_size = data.train_extr:size(2)
 
