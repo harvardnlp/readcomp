@@ -1,5 +1,7 @@
 #!/bin/bash
 
+trap "kill 0" SIGINT # allow to kill all spawning processes in the same group
+
 if [ $1 == "-h" ]; then
   echo "Syntax::sh scriptname output-file num-epochs codefile gpu-id"
   exit
@@ -43,7 +45,7 @@ fi
 
 gpuid=0
 class=("asr")
-seed=(7)
+seed=(7 17)
 batch=(64)
 embed=(128 58 200)
 adam=("{0, 0.999}")
@@ -58,9 +60,9 @@ for cls in "${class[@]}"; do
           for c in "${cutoff[@]}"; do
             for pst in "${post[@]}"; do
               gpuid=$((gpuid % 2 + 1))
-              if [ $gpuid -eq $gpu ] then
-                printf "iteration = $t: th $codefile --cuda --device $gpuid --progress --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig $ad --hiddensize {$d0} --postsize $pst --cutoff $c $extra\n" >> $OUTFILE
-                th $codefile --cuda --device $gpuid --progress --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig $ad --hiddensize {$d0} --postsize $pst --cutoff $c $extra >> $OUTFILE
+              if [ "$gpuid" = "$gpu" ]; then
+                printf "iteration = $t: th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig $ad --hiddensize {$d0} --postsize $pst --cutoff $c $extra\n" >> $OUTFILE
+                th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig "$ad" --hiddensize {$d0} --postsize $pst --cutoff $c $extra >> $OUTFILE
               fi
             done
           done

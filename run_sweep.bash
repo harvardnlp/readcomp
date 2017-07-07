@@ -1,5 +1,7 @@
 #!/bin/bash
 
+trap "kill 0" SIGINT # allow to kill all spawning processes in the same group
+
 if [ $1 == "-h" ]; then
   echo "Syntax::sh scriptname sweep-name num-epochs num-gpus"
   exit
@@ -21,7 +23,8 @@ else
 fi
 
 OUTDIR="sweep-$SWEEP"
-OUTFILE = "$OUTDIR/$OUTDIR-output.console"
+OUTFILE="$OUTDIR/output-$SWEEP.console"
+echo "Using output dir " $OUTDIR
 echo "Using output file " $OUTFILE
 
 if [ -e $OUTFILE ]; then
@@ -38,7 +41,7 @@ mkdir $OUTDIR
 cp sweep.bash $OUTDIR/
 cp $codefile $OUTDIR/
 
-for i in {1..$NUMGPU} do
+for (( i=1; i<=$NUMGPU; i++ )); do
 	bash $OUTDIR/sweep.bash "$OUTFILE.$i" "$2" "$OUTDIR/$codefile" $i &
 done
 wait
