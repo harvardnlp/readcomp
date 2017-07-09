@@ -5,3 +5,4 @@ word_to_idx.csv
 *.vocab
 stat.py
 test*
+**/sweep-*
