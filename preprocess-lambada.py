@@ -280,7 +280,7 @@ class Corpus(object):
 
         target_length = num_words - sep - 1
         if target_length < 3:
-          print_msg('INFO: SKIPPING... Target sentence should contain at least 3 tokens', verbose_level = 2)
+          print_msg('INFO: SKIPPING... Target sentence should contain at least 3 tokens (in file {}). Target = {}, Line = {}'.format(file, words[sep+1:], num_lines_in_file), verbose_level = 2)
           continue
 
         data['offsets'].append(len(data['data']) + 1)

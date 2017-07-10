@@ -45,12 +45,12 @@ fi
 
 gpuid=0
 class=("asr")
-seed=(7 17)
+seed=(7 1 2 3 4 5 6 8 9 10 11 12 13 14 15 16 17 18)
 batch=(64)
-embed=(128 58 200)
+embed=(128)
 adam=("{0, 0.999}")
 cutoff=(10)
-post=(80 65 70 75)
+post=(80)
 extra=""
 for cls in "${class[@]}"; do
   for rs in "${seed[@]}"; do
