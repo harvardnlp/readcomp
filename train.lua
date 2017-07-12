@@ -48,7 +48,7 @@ cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each r
 cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 64, 'number of examples per batch')
-cmd:option('--savepath', paths.concat(dl.SAVE_PATH, 'rnnlm'), 'path to directory where experiment log (includes model) will be saved')
+cmd:option('--savepath', 'models', 'path to directory where experiment log (includes model) will be saved')
 cmd:option('--id', '', 'id string of this experiment (used to name output file) (defaults to a unique id)')
 cmd:option('--evalheuristics', false, 'evaluate heuristics approach e.g. random selection from context, most likely')
 cmd:option('--dontsave', false, 'dont save the model')
@@ -282,11 +282,11 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   return contexts, targets, answer, answer_ind
 end
 
-function test_model()
+function test_model(saved_model_file)
   local metadata
   local batch_size = opt.batchsize
   local model = lm
-  local model_file = paths.concat(opt.savepath, opt.id..'.t7')
+  local model_file = saved_model_file and saved_model_file or paths.concat(opt.savepath, opt.id..'.t7')
   if not lm then
     -- load model for computing accuracy & perplexity for target answers
     metadata = torch.load(model_file)

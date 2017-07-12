@@ -99,6 +99,8 @@ def main(arguments):
                       help='relative location of output validation file')
   parser.add_argument('--out_test_file', type=str, default='test.txt',
                       help='relative location of output testing file')
+  parser.add_argument('--out_control_file', type=str, default='control.txt',
+                      help='relative location of output control file')
   parser.add_argument('--debug', action='store_true',
                       help='print output for manual debugging')
 
@@ -106,9 +108,11 @@ def main(arguments):
 
   punctuations = load_punc(args.data + args.punctuations)
 
-  aggregate(args.data + args.train, args.data + args.out_train_file, punctuations, args.debug)
-  aggregate(args.data + args.valid, args.data + args.out_valid_file, punctuations, args.debug)
-  aggregate(args.data + args.test,  args.data + args.out_test_file,  punctuations, args.debug)
+  aggregate(args.data + args.train, args.data + args.out_train_file,   punctuations, args.debug)
+  aggregate(args.data + args.valid, args.data + args.out_valid_file,   punctuations, args.debug)
+  # just a dummy control file to fit the syntax of later processing code
+  aggregate(args.data + args.valid, args.data + args.out_control_file, punctuations, args.debug)
+  aggregate(args.data + args.test,  args.data + args.out_test_file,    punctuations, args.debug)
 
 
 if __name__ == '__main__':
