@@ -282,11 +282,13 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   return contexts, targets, answer, answer_ind
 end
 
-function test_model(saved_model_file)
+function test_model(saved_model_file, out_result_file)
   local metadata
   local batch_size = opt.batchsize
   local model = lm
   local model_file = saved_model_file and saved_model_file or paths.concat(opt.savepath, opt.id..'.t7')
+  local out_file_path = out_result_file and out_result_file or paths.concat(opt.savepath, opt.id..'.t7.result')
+
   if not lm then
     -- load model for computing accuracy & perplexity for target answers
     metadata = torch.load(model_file)
@@ -297,7 +299,6 @@ function test_model(saved_model_file)
 
   model:forget()
   model:evaluate()
-
 
   local all_batches = torch.range(1, data.test_location:size(1), opt.batchsize)
   local ntestbatches = all_batches:size(1)
@@ -311,6 +312,16 @@ function test_model(saved_model_file)
     local targets = tests_tar
     local answer = tests_ans
     local outputs = model:forward({inputs, targets})
+    local in_words = inputs[1][1]
+
+    if saved_model_file then
+      local out_file = hdf5.open(out_file_path .. i, 'w')
+      local inp = in_words:long()
+      local out = outputs:double()
+      out_file:write('inputs', inp)
+      out_file:write('outputs', out)
+      out_file:close()
+    end
 
     -- compute attention sum for each word in the context, except for punctuation symbols
     for b = 1,outputs:size(1) do
@@ -319,7 +330,7 @@ function test_model(saved_model_file)
         local max_prob = 0
         local max_word = 0
         for iw = 1, outputs:size(2) do
-          local word = inputs[1][1][iw][b]
+          local word = in_words[iw][b]
           if word ~= 0 and puncs[word] == nil and stopwords[word] == nil then -- ignore punctuations & stop-words
             if word_to_prob[word] == nil then
               word_to_prob[word] = 0
