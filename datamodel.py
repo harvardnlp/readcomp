@@ -331,7 +331,7 @@ class Corpus(object):
           bigram_match = 0
           if i <= sep:
             if self.answer_identifier: # if location of answer is identified in the query (e.g. for CNN dataset) 
-              if num_lines_in_file == 1:
+              if num_lines_in_file == 1 and i == 0:
                 print_msg('INFO: Using answer identifier token = {}'.format(self.answer_identifier), 1, self.args_verbose_level)
               answer_index = words.index(self.answer_identifier)
               # make sure the previous and next bigrams of the token are actually in the context
