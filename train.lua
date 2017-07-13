@@ -282,12 +282,12 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   return contexts, targets, answer, answer_ind
 end
 
-function test_model(saved_model_file, out_result_file)
+function test_model(saved_model_file)
   local metadata
   local batch_size = opt.batchsize
   local model = lm
   local model_file = saved_model_file and saved_model_file or paths.concat(opt.savepath, opt.id..'.t7')
-  local out_file_path = out_result_file and out_result_file or paths.concat(opt.savepath, opt.id..'.t7.result')
+  local out_file_path = saved_model_file and saved_model_file..'.result' or paths.concat(opt.savepath, opt.id..'.t7.result')
 
   if not lm then
     -- load model for computing accuracy & perplexity for target answers
