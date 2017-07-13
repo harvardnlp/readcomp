@@ -198,8 +198,8 @@ def main(arguments):
                       help='relative location of punctuation file')
   parser.add_argument('--stopwords', type=str, default='mctest-stopwords.txt',
                       help='relative location of stop-words file')
-  parser.add_argument('--context_query_separator', type=str, default='$$$',
-                      help='separator token between context, query and answer')
+  parser.add_argument('--context_query_separator', type=str, default='',
+                      help='separator token between context, query and answer, for CNN dataset use $$$')
   parser.add_argument('--answer_identifier', type=str, default='',
                       help='identifier for answer token in the query, for CNN dataset this is @placeholder')
   parser.add_argument('--out_file', type=str, default='lambada-asr.hdf5',
