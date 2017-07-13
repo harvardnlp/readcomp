@@ -86,8 +86,8 @@ def validate_tensor(corpus, t):
     idx2suff = {v: k for k, v in corpus.dictionary.suff2idx.iteritems()}
     idx2post = {v: k for k, v in corpus.dictionary.post2idx.iteritems()}
 
-    expected_pref = [get_prefix(w) for w in doc_words]
-    expected_suff = [get_suffix(w) for w in doc_words]
+    expected_pref = [datamodel.get_prefix(w) for w in doc_words]
+    expected_suff = [datamodel.get_suffix(w) for w in doc_words]
     expected_post = [tag[1] for tag in nltk.pos_tag(doc_words)]
 
     actual_pref = [idx2pref[token_id] for token_id in t['pref'][offset : offset + context_length + target_length]]
@@ -103,7 +103,7 @@ def validate_tensor(corpus, t):
     # pos tags are performed before <unk> tokenization, allow for 5% mismatch
     num_mis = 0
     for j in range(len(expected_post)):
-      if doc_words[j] != UNKNOWN and expected_post[j] != actual_post[j]:
+      if doc_words[j] != datamodel.UNKNOWN and expected_post[j] != actual_post[j]:
         expected_post[j] = '*' + expected_post[j] + '*'
         actual_post[j] = '*' + actual_post[j] + '*'
         num_mis += 1
