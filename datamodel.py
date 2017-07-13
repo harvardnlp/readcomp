@@ -113,8 +113,10 @@ class Dictionary(object):
 
 
 class Corpus(object):
-  def __init__(self, args_verbose_level, vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file):
+  def __init__(self, args_verbose_level, vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file, context_target_separator, answer_identifier):
     self.args_verbose_level = args_verbose_level
+    self.context_target_separator = context_target_separator # special separator token to identify context and target
+    self.answer_identifier = answer_identifier
     self.puncstop_answer_count = 0
     self.dictify(vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file)
 
@@ -244,15 +246,30 @@ class Corpus(object):
       for line in f:
         num_lines_in_file += 1
         words = line.split()
-        num_words = len(words)
-
-        pos_tags = [t[1] for t in nltk.pos_tag(words)]
 
         sep = -1 # last index of word in the context
-        for i in range(num_words - 2, -1, -1):
-          if words[i] in end_words:
-            sep = i
-            break
+        if self.context_target_separator:
+          sep = words.index(self.context_target_separator) - 1
+          if sep <= 2:
+            print_msg('INFO: SKIPPING... Context should contain at least 2 tokens, line = {}'.format(line), 2, self.args_verbose_level)
+            continue
+
+          words.pop(sep + 1) # remove separator
+          target_answer_separator_index = words.index(self.context_target_separator)
+          if target_answer_separator_index <= 0:
+            print_msg('INFO: SKIPPING... Target-Answer separator not found, line = {}'.format(line), 2, self.args_verbose_level)
+            continue
+          words.pop(target_answer_separator_index)
+
+          num_words = len(words)
+        else:
+          num_words = len(words)
+          for i in range(num_words - 2, -1, -1):
+            if words[i] in end_words:
+              sep = i
+              break
+
+        pos_tags = [t[1] for t in nltk.pos_tag(words)]
 
         if training:
           # make sure answer is part of context (for computing loss & gradients during training)
@@ -302,14 +319,25 @@ class Corpus(object):
 
           self.dictionary.update_count(word)
 
-        previous_answer_bigram = [words[num_words - 3], words[num_words - 2]]
+        
         for i in range(len(words)):
           word = words[i]
           extra_features = []
 
           freq = float(extr_word_freq[word]) / len(words)
-          bigram_match = 1 if i > 2 and i <= sep and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2] else 0 
-          
+          bigram_match = 0
+          if i <= sep:
+            if self.answer_identifier: # if location of answer is identified in the query (e.g. for CNN dataset) 
+              answer_index = words.index(self.answer_identifier)
+              # make sure the previous and next bigrams of the token are actually in the context
+              # and vice versa for the target answer 
+              if i > 2 and answer_index > sep + 2 and words[i - 2] == words[answer_index - 2] and words[i - 1] == words[answer_index - 1]:
+                bigram_match = 1
+              elif i <= sep - 2 and answer_index < num_words - 3 and words[i + 1] == words[answer_index + 1] and words[i + 2] == words[answer_index + 2]:
+                bigram_match = 1
+            else: # if not assume the location is at the end (e.g. LAMBADA)
+              bigram_match = 1 if i > 2 and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2] else 0 
+
           extra_features.append(freq)
           extra_features.append(bigram_match)
 
