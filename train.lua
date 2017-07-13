@@ -287,7 +287,6 @@ function test_model(saved_model_file)
   local batch_size = opt.batchsize
   local model = lm
   local model_file = saved_model_file and saved_model_file or paths.concat(opt.savepath, opt.id..'.t7')
-  local out_file_path = saved_model_file and saved_model_file..'.result' or paths.concat(opt.savepath, opt.id..'.t7.result')
 
   if not lm then
     -- load model for computing accuracy & perplexity for target answers
@@ -315,7 +314,8 @@ function test_model(saved_model_file)
     local in_words = inputs[1][1]
 
     if saved_model_file then
-      local out_file = hdf5.open(out_file_path .. i, 'w')
+      local out_dump_file = string.format('%s.%03d.dump', saved_model_file, i)
+      local out_file = hdf5.open(out_dump_file, 'w')
       local inp = in_words:long()
       local out = outputs:double()
       out_file:write('inputs', inp)
