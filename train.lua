@@ -313,16 +313,8 @@ function test_model(saved_model_file)
     local outputs = model:forward({inputs, targets})
     local in_words = inputs[1][1]
 
-    if saved_model_file then
-      local out_dump_file = string.format('%s.%03d.dump', saved_model_file, i)
-      local out_file = hdf5.open(out_dump_file, 'w')
-      local inp = in_words:long()
-      local out = outputs:double()
-      out_file:write('inputs', inp)
-      out_file:write('outputs', out)
-      out_file:close()
-    end
-
+    local predictions = answer.new():resizeAs(answer):zero()
+    local truth = {}
     -- compute attention sum for each word in the context, except for punctuation symbols
     for b = 1,outputs:size(1) do
       if answer[b] ~= 0 then
@@ -342,30 +334,25 @@ function test_model(saved_model_file)
             end
           end
         end
-
-        -- if b == 13 then
-        --   print('inputs[{{},b}]')
-        --   print(inputs[{{},b}]:contiguous():view(1,-1))
-        --   print('targets[{{},b}]')
-        --   print(targets[1][{{},b}]:contiguous():view(1,-1))
-        --   print('answer[b]')
-        --   print(answer[b])
-        --   print('outputs')
-        --   print(outputs[b]:view(1,-1))
-        --   print('word_to_prob')
-        --   for i,v in pairs(word_to_prob) do
-        --     print(''..i..' : '..v)
-        --   end
-        --   print('max_word')
-        --   print(max_word)
-
-        --   outputs:quit()
-        -- end
         if max_word == answer[b] then
           correct = correct + 1
         end
         num_examples = num_examples + 1
+
+        predictions[b] = max_word
       end
+    end
+
+    if saved_model_file then
+      local out_dump_file = string.format('%s.%03d.dump', saved_model_file, i)
+      local out_file = hdf5.open(out_dump_file, 'w')
+      local inp = in_words:long()
+      local out = outputs:double()
+      out_file:write('inputs', inp)
+      out_file:write('outputs', out)
+      out_file:write('predictions', predictions)
+      out_file:write('answers', answer)
+      out_file:close()
     end
 
     if opt.progress then
