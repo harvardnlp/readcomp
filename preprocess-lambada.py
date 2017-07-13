@@ -198,6 +198,10 @@ def main(arguments):
                       help='relative location of punctuation file')
   parser.add_argument('--stopwords', type=str, default='mctest-stopwords.txt',
                       help='relative location of stop-words file')
+  parser.add_argument('--context_query_separator', type=str, default='$$$',
+                      help='separator token between context, query and answer')
+  parser.add_argument('--answer_identifier', type=str, default='',
+                      help='identifier for answer token in the query, for CNN dataset this is @placeholder')
   parser.add_argument('--out_file', type=str, default='lambada-asr.hdf5',
                       help='output hdf5 file')
   parser.add_argument('--debug_translate', type=str, default='',
@@ -214,7 +218,7 @@ def main(arguments):
   out_vocab_file_prefix = args.out_file.split('.')[0]
   start_time = time.time()
   if len(args.debug_translate) or args.validate:
-    corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None)
+    corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None)
     corpus.load_vocab(out_vocab_file_prefix)
     if args.validate:
       validate(corpus, args.out_file)
@@ -222,9 +226,11 @@ def main(arguments):
       debug_translate(corpus, args.out_file, args.debug_translate)
   else:
     if len(args.glove):
-      corpus = datamodel.Corpus(args.verbose_level, None, args.glove, args.glove_size, args.data + args.punctuations, args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None)
+      corpus = datamodel.Corpus(args.verbose_level, None, args.glove, args.glove_size, args.data + args.punctuations, 
+        args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None, args.context_query_separator, args.answer_identifier)
     else:
-      corpus = datamodel.Corpus(args.verbose_level, args.data + args.vocab, None, None, args.data + args.punctuations, args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None)
+      corpus = datamodel.Corpus(args.verbose_level, args.data + args.vocab, None, None, args.data + args.punctuations, 
+        args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None, args.context_query_separator, args.answer_identifier)
     corpus.load(args.data, args.train, args.valid, args.test, args.control)
     corpus.save(out_vocab_file_prefix)
 

@@ -249,6 +249,9 @@ class Corpus(object):
 
         sep = -1 # last index of word in the context
         if self.context_target_separator:
+          if num_lines_in_file == 1:
+            print_msg('INFO: Using context-query-answer separator token = {}'.format(self.context_target_separator), 1, self.args_verbose_level)
+
           sep = words.index(self.context_target_separator) - 1
           if sep <= 2:
             print_msg('INFO: SKIPPING... Context should contain at least 2 tokens, line = {}'.format(line), 2, self.args_verbose_level)
@@ -328,6 +331,8 @@ class Corpus(object):
           bigram_match = 0
           if i <= sep:
             if self.answer_identifier: # if location of answer is identified in the query (e.g. for CNN dataset) 
+              if num_lines_in_file == 1:
+                print_msg('INFO: Using answer identifier token = {}'.format(self.answer_identifier), 1, self.args_verbose_level)
               answer_index = words.index(self.answer_identifier)
               # make sure the previous and next bigrams of the token are actually in the context
               # and vice versa for the target answer 
