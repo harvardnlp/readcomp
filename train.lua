@@ -629,7 +629,7 @@ function train(params, grad_params, epoch)
   local all_batches = torch.range(1, num_examples, opt.batchsize)
   local nbatches = all_batches:size(1)
   local randind = epoch == 1 and torch.range(1,nbatches) or torch.randperm(nbatches)
-  local grad_outputs = torch.zeros(opt.batchsize, opt.maxseqlen)
+  local grad_outputs = torch.zeros(opt.batchsize, 100) -- preallocate
 
   print('Total # of batches: ' .. nbatches)
 

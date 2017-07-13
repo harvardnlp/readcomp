@@ -137,19 +137,19 @@ class Dictionary(object):
 
 
 class Corpus(object):
-  def __init__(self, vocab_file, glove_file, glove_size, punc_file, stop_word_file):
+  def __init__(self, vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file):
     self.puncstop_answer_count = 0
-    self.dictify(vocab_file, glove_file, glove_size, punc_file, stop_word_file)
+    self.dictify(vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file)
 
 
-  def dictify(self, vocab_file, glove_file, glove_size, punc_file, stop_word_file):
+  def dictify(self, vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file):
     self.dictionary = Dictionary()
 
     if vocab_file != None or glove_file != None:
       self.dictionary.add_word(SEPARATOR) # map to 0 for masked rnn
       self.dictionary.add_word(UNKNOWN)
       if vocab_file != None:
-        with open(vocab_file, 'r') as f:
+        with codecs.open(vocab_file, 'r', encoding="utf-8") as f:
           for line in f:
             if line.strip():
               self.dictionary.add_word(line.strip())
@@ -171,7 +171,8 @@ class Corpus(object):
       self.punctuations = []
       self.stopwords = []
 
-      with open(punc_file, 'r') as f:
+      with codecs.open(punc_file, 'r', encoding="utf-8") as f:
+        print_msg('Loading punctuations ...', verbose_level = 1)
         for line in f:
           punc = line.strip()
           if punc:
@@ -179,13 +180,19 @@ class Corpus(object):
             if punc not in self.dictionary.punc2idx:
               self.dictionary.punc2idx[punc] = len(self.dictionary.punc2idx) + 1
 
-      with open(stop_word_file, 'r') as f:
+      with codecs.open(stop_word_file, 'r', encoding="utf-8") as f:
+        print_msg('Loading stop words ...', verbose_level = 1)
         for line in f:
           sw = line.strip()
           if sw:
             self.stopwords.append(self.dictionary.add_word(sw))
             if sw not in self.dictionary.stop2idx:
               self.dictionary.stop2idx[sw] = len(self.dictionary.stop2idx) + 1
+
+      with codecs.open(extra_vocab_file, 'r', encoding="utf-8") as f:
+        print_msg('Loading extra vocab ...', verbose_level = 1)
+        for line in f:
+          self.dictionary.add_word(line.strip())
 
       print 'Vocab size = {}'.format(len(self.dictionary), verbose_level = 1)
 
@@ -196,9 +203,13 @@ class Corpus(object):
 
 
   def load(self, path, train, valid, test, control):
+    print_msg('Loading train data ...', verbose_level = 1)
     self.train   = self.tokenize(os.path.join(path, train),   training = True)
+    print_msg('Loading validation data...', verbose_level = 1)
     self.valid   = self.tokenize(os.path.join(path, valid),   training = True)
+    print_msg('Loading test data...', verbose_level = 1)
     self.test    = self.tokenize(os.path.join(path, test),    training = False)
+    print_msg('Loading control data...', verbose_level = 1)
     self.control = self.tokenize(os.path.join(path, control), training = False)
 
     print_msg('\nTraining Data Statistics:\n', verbose_level = 1)
@@ -493,14 +504,14 @@ def main(arguments):
                       help='relative location (file or folder) of control data')
   parser.add_argument('--vocab', type=str, default='vocab.txt',
                       help='relative location of vocab file')
+  parser.add_argument('--extra_vocab', type=str, default='extra_vocab.txt',
+                      help='relative location of extra vocab file to load into dictionary')
   parser.add_argument('--punctuations', type=str, default='punctuations.txt',
                       help='relative location of punctuation file')
   parser.add_argument('--stopwords', type=str, default='mctest-stopwords.txt',
                       help='relative location of stop-words file')
   parser.add_argument('--out_file', type=str, default='lambada-asr.hdf5',
                       help='output hdf5 file')
-  parser.add_argument('--out_vocab_file_prefix', type=str, default='lambada-asr',
-                      help='file name prefix for output vocab files')
   parser.add_argument('--debug_translate', type=str, default='',
                       help='translate the preprocessed .hdf5 back into words, or "manual" to translate manual input')
   parser.add_argument('--verbose_level', type=int, default=2,
@@ -511,21 +522,23 @@ def main(arguments):
   # get embeddings
   # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
 
+
+  out_vocab_file_prefix = args.out_file.split('.')[0]
   start_time = time.time()
   if len(args.debug_translate) or args.validate:
-    corpus = Corpus(None, None, None, None, None)
-    corpus.load_vocab(args.out_vocab_file_prefix)
+    corpus = Corpus(None, None, None, None, None, None)
+    corpus.load_vocab(out_vocab_file_prefix)
     if args.validate:
       validate(corpus, args.out_file)
     else:
       debug_translate(corpus, args.out_file, args.debug_translate)
   else:
     if len(args.glove):
-      corpus = Corpus(None, args.glove, args.glove_size, args.data + args.punctuations, args.data + args.stopwords)
+      corpus = Corpus(None, args.glove, args.glove_size, args.data + args.punctuations, args.data + args.stopwords, args.data + args.extra_vocab)
     else:
-      corpus = Corpus(args.data + args.vocab, None, None, args.data + args.punctuations, args.data + args.stopwords)
+      corpus = Corpus(args.data + args.vocab, None, None, args.data + args.punctuations, args.data + args.stopwords, args.data + args.extra_vocab)
     corpus.load(args.data, args.train, args.valid, args.test, args.control)
-    corpus.save(args.out_vocab_file_prefix)
+    corpus.save(out_vocab_file_prefix)
 
     with h5py.File(args.out_file, "w") as f:
       f['punctuations']     = np.array(corpus.punctuations) # punctuations are ignored during test time

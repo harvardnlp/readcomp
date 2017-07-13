@@ -28,9 +28,10 @@ def load_punc(punc_file):
   return punctuations
 
 
-def aggregate(in_path, out_file, punctuations, debug):
+def aggregate(in_path, out_file, punctuations, out_entity_vocab, debug, num_lines):
   print 'Processing path {}'.format(in_path)
 
+  num_processed_lines = 0
   os.chdir(in_path)
   with codecs.open(out_file, 'w', encoding='utf8') as outf:
     for file in glob.glob("*.question"):
@@ -46,7 +47,7 @@ def aggregate(in_path, out_file, punctuations, debug):
 
         # remove ending punctuation from query, since we will concatenate the answer
         # to it to simulate a "target" sentence in LAMBADA (with answer being the last token)
-        query_parts = [x for x in query.split(' ') if x and len(x) > 0]
+        query_parts = query.split()
         if len(query_parts) <= 1:
           print 'WARNING: skipping... query has one or less token: {}, in file {}'.format(query, file)
           continue
@@ -57,8 +58,18 @@ def aggregate(in_path, out_file, punctuations, debug):
           query_parts.pop(-2)
           query = ' '.join(query_parts)
 
+        context = context[:-1] if context[-1] == '.' else context
         doc = context + ' . ' + query + ' ' + answer + '\n'
         outf.write(doc)
+
+        doc_words = doc.split()
+        for w in doc_words:
+          if w[0] == '@' and len(w) > 1 and w not in out_entity_vocab:
+            out_entity_vocab[w] = 1
+
+        num_processed_lines += 1
+        if num_lines > 0 and num_processed_lines >= num_lines:
+          break
         
         if debug:
           mapping = {}
@@ -101,6 +112,10 @@ def main(arguments):
                       help='relative location of output testing file')
   parser.add_argument('--out_control_file', type=str, default='control.txt',
                       help='relative location of output control file')
+  parser.add_argument('--out_entity_vocab_file', type=str, default='entity_vocab.txt',
+                      help='relative location of output entity vocab file')
+  parser.add_argument('--tiny', action='store_true',
+                      help='whether to generate tiny files')
   parser.add_argument('--debug', action='store_true',
                       help='print output for manual debugging')
 
@@ -108,11 +123,16 @@ def main(arguments):
 
   punctuations = load_punc(args.data + args.punctuations)
 
-  aggregate(args.data + args.train, args.data + args.out_train_file,   punctuations, args.debug)
-  aggregate(args.data + args.valid, args.data + args.out_valid_file,   punctuations, args.debug)
+  out_entity_vocab = {}
+  aggregate(args.data + args.train, args.data + args.out_train_file,   punctuations, out_entity_vocab, args.debug, 1000 if args.tiny else -1)
+  aggregate(args.data + args.valid, args.data + args.out_valid_file,   punctuations, out_entity_vocab, args.debug, 100 if args.tiny else -1)
   # just a dummy control file to fit the syntax of later processing code
-  aggregate(args.data + args.valid, args.data + args.out_control_file, punctuations, args.debug)
-  aggregate(args.data + args.test,  args.data + args.out_test_file,    punctuations, args.debug)
+  aggregate(args.data + args.valid, args.data + args.out_control_file, punctuations, out_entity_vocab, args.debug, 100 if args.tiny else -1)
+  aggregate(args.data + args.test,  args.data + args.out_test_file,    punctuations, out_entity_vocab, args.debug, 100 if args.tiny else -1)
+
+  with codecs.open(args.data + args.out_entity_vocab_file, 'w', encoding='utf8') as vf:
+    for w in out_entity_vocab:
+      vf.write(w + '\n')
 
 
 if __name__ == '__main__':
