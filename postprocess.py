@@ -62,7 +62,7 @@ def main(arguments):
 
   hfont = { 'fontname':'serif' }
   sns.set(font_scale=2,font='serif')
-  plt.figure(figsize=(54, 24), dpi=100)
+  plt.figure(figsize=(60, 40), dpi=100)
 
   compute_accuracy(args)
 
@@ -70,7 +70,7 @@ def main(arguments):
   corpus.load_vocab(args.out_vocab_file_prefix)
   idx2word = corpus.dictionary.idx2word
 
-  for filename in glob.glob(args.model_dump_pattern):
+  for filename in sorted(glob.glob(args.model_dump_pattern), reverse = True): # work on shorter examples first
     with h5py.File(filename, "r") as f:
       inputs      = np.array(f['inputs'],      dtype=int)
       targets     = np.array(f['targets'],     dtype=int)
