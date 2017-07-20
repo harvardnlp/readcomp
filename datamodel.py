@@ -14,26 +14,12 @@ def print_msg(message, verbose_level, args_verbose_level):
     print message
 
 
-def get_suffix(w):
-    if len(w) < 2:
-        return w
-    return w[-2:]
-
-
-def get_prefix(w):
-    if len(w) < 2:
-        return w
-    return w[:2]
-
-
 class Dictionary(object):
   def __init__(self):
     self.word2idx = {}
     self.word2count = {} # for NCE if training LM
     self.idx2word = []
 
-    self.pref2idx = {}
-    self.suff2idx = {}
     self.post2idx = {} # pos tags
     self.punc2idx = {} # punctuations
     self.stop2idx = {} # stop words
@@ -44,14 +30,6 @@ class Dictionary(object):
       self.idx2word.append(word)
       self.word2idx[word] = len(self.idx2word) - 1 # subtract 1 to make <sep> token index 0
       self.word2count[word] = 0 # set to 0 since a word in vocab may not appear in training data
-
-    suff = get_suffix(word)
-    if suff not in self.suff2idx:
-      self.suff2idx[suff] = len(self.suff2idx) + 1
-
-    pref = get_prefix(word)
-    if pref not in self.pref2idx:
-      self.pref2idx[pref] = len(self.pref2idx) + 1
 
     return self.word2idx[word]
 
@@ -75,14 +53,6 @@ class Dictionary(object):
         count = self.word2count[word]
         outf.write(u'{}\t{}\t{}\n'.format(i,word,count))
 
-    with codecs.open(file_prefix + '.prefix.vocab', 'w', encoding='utf8') as pref:
-      for key, value in sorted(self.pref2idx.iteritems(), key=lambda (k,v): (v,k)):
-        pref.write(u'{}\t{}\n'.format(key,value))
-
-    with codecs.open(file_prefix + '.suffix.vocab', 'w', encoding='utf8') as suff:
-      for key, value in sorted(self.suff2idx.iteritems(), key=lambda (k,v): (v,k)):
-        suff.write(u'{}\t{}\n'.format(key,value))
-
     with codecs.open(file_prefix + '.pos.vocab', 'w', encoding='utf8') as posf:
       for key, value in sorted(self.post2idx.iteritems(), key=lambda (k,v): (v,k)):
         posf.write(u'{}\t{}\n'.format(key,value))
@@ -95,16 +65,6 @@ class Dictionary(object):
         self.word2idx[parts[1]] = int(parts[0])
         self.idx2word.append(parts[1])
         self.word2count[parts[1]] = int(parts[2])
-
-    with codecs.open(file_prefix + '.prefix.vocab', 'r', encoding='utf8') as pref:
-      for line in pref:
-        parts = line.split()
-        self.pref2idx[parts[0]] = int(parts[1])
-
-    with codecs.open(file_prefix + '.suffix.vocab', 'r', encoding='utf8') as suff:
-      for line in suff:
-        parts = line.split()
-        self.suff2idx[parts[0]] = int(parts[1])
 
     with codecs.open(file_prefix + '.pos.vocab', 'r', encoding='utf8') as posf:
       for line in posf:
@@ -202,9 +162,6 @@ class Corpus(object):
     print_msg('Target Length: max = {}, min = {}, average = {}, std = {}'.format(
       np.max(train_target_length), np.min(train_target_length), np.mean(train_target_length), np.std(train_target_length)), 1, self.args_verbose_level)
 
-    print_msg('\nPrefix and Suffix Statistics:', 1, self.args_verbose_level)
-    print_msg('Prefix Size: {}'.format(len(self.dictionary.pref2idx)), 1, self.args_verbose_level)
-    print_msg('Suffix Size: {}'.format(len(self.dictionary.suff2idx)), 1, self.args_verbose_level)
     print_msg('POS Size: {}'.format(len(self.dictionary.post2idx)), 1, self.args_verbose_level)
 
 
@@ -217,8 +174,6 @@ class Corpus(object):
     
     data = { 
       'data': [], # token ids for each word in the corpus 
-      'pref': [], # prefix ids 
-      'suff': [], # suffix ids 
       'post': [], # pos tags 
       'extr': [], # extra features, such as frequency of token in the context, whether previous bi-gram of token match with that of the answer etc...
       'offsets': [], # offset locations for each line in the final 1-d data array 
@@ -228,7 +183,7 @@ class Corpus(object):
 
     self.tokenize_file(path, data, training)
 
-    sorted_data = { 'data': data['data'], 'pref': data['pref'], 'suff': data['suff'], 'post': data['post'], 'extr': data['extr'] }
+    sorted_data = { 'data': data['data'], 'post': data['post'], 'extr': data['extr'] }
 
     loc = np.array([np.array(data['offsets']), np.array(data['context_length']), np.array(data['target_length'])]).T
     loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
@@ -319,12 +274,6 @@ class Corpus(object):
             extr_word_freq[word] += 1
 
           data['data'].append(self.dictionary.word2idx[word])
-
-          pref = get_prefix(word)
-          data['pref'].append(self.dictionary.pref2idx[pref])
-
-          suff = get_suffix(word)
-          data['suff'].append(self.dictionary.suff2idx[suff])
 
           pos_tag = pos_tags[i]
           data['post'].append(self.dictionary.add_pos_tag(pos_tag))

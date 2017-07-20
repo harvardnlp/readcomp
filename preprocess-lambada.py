@@ -40,29 +40,21 @@ def load_file(file):
   with h5py.File(file, "r") as f:
     train = {
       'data': np.array(f['train_data']),
-      'pref': np.array(f['train_pref']),
-      'suff': np.array(f['train_suff']),
       'post': np.array(f['train_post']),
       'location': np.array(f['train_location'], dtype=int),
     }
     test = {
       'data': np.array(f['test_data'], dtype=int),
-      'pref': np.array(f['test_pref'], dtype=int),
-      'suff': np.array(f['test_suff'], dtype=int),
       'post': np.array(f['test_post'], dtype=int),
       'location': np.array(f['test_location'], dtype=int),
     }
     valid = {
       'data': np.array(f['valid_data'], dtype=int),
-      'pref': np.array(f['valid_pref'], dtype=int),
-      'suff': np.array(f['valid_suff'], dtype=int),
       'post': np.array(f['valid_post'], dtype=int),
       'location': np.array(f['valid_location'], dtype=int),
     }
     control = {
       'data': np.array(f['control_data'], dtype=int),
-      'pref': np.array(f['control_pref'], dtype=int),
-      'suff': np.array(f['control_suff'], dtype=int),
       'post': np.array(f['control_post'], dtype=int),
       'location': np.array(f['control_location'], dtype=int),
     }
@@ -82,23 +74,10 @@ def validate_tensor(corpus, t):
 
     doc_words = [corpus.dictionary.idx2word[token_id] for token_id in text]
 
-    idx2pref = {v: k for k, v in corpus.dictionary.pref2idx.iteritems()}
-    idx2suff = {v: k for k, v in corpus.dictionary.suff2idx.iteritems()}
     idx2post = {v: k for k, v in corpus.dictionary.post2idx.iteritems()}
 
-    expected_pref = [datamodel.get_prefix(w) for w in doc_words]
-    expected_suff = [datamodel.get_suffix(w) for w in doc_words]
     expected_post = [tag[1] for tag in nltk.pos_tag(doc_words)]
-
-    actual_pref = [idx2pref[token_id] for token_id in t['pref'][offset : offset + context_length + target_length]]
-    actual_suff = [idx2suff[token_id] for token_id in t['suff'][offset : offset + context_length + target_length]]
     actual_post = [idx2post[token_id] for token_id in t['post'][offset : offset + context_length + target_length]]
-
-    assert np.array_equal(expected_pref, actual_pref), 'prefix validation failed, i = {}\nwords={}\ne = {}\na = {}'.format(
-      str(i), ' '.join(doc_words), ' '.join(str(p) for p in expected_pref), ' '.join(str(p) for p in actual_pref))
-
-    assert np.array_equal(expected_suff, actual_suff), 'suffix validation failed, i = {}\nwords={}\ne = {}\na = {}'.format(
-      str(i), ' '.join(doc_words), ' '.join(str(p) for p in expected_suff), ' '.join(str(p) for p in actual_suff))
 
     # pos tags are performed before <unk> tokenization, allow for 5% mismatch
     num_mis = 0
@@ -127,10 +106,6 @@ def validate(corpus, file):
 def debug_translate(corpus, file, mode):
   if mode == 'text':
     inter_translate(corpus.dictionary.idx2word)
-  elif mode == 'suffix':
-    inter_translate({v: k for k, v in corpus.dictionary.suff2idx.iteritems()})
-  elif mode == 'prefix':
-    inter_translate({v: k for k, v in corpus.dictionary.pref2idx.iteritems()})
   elif mode == 'postag':
     inter_translate({v: k for k, v in corpus.dictionary.post2idx.iteritems()})
   else:
@@ -238,34 +213,24 @@ def main(arguments):
       f['punctuations']     = np.array(corpus.punctuations) # punctuations are ignored during test time
       f['stopwords']        = np.array(corpus.stopwords) # punctuations are ignored during test time
       f['vocab_size']       = np.array([len(corpus.dictionary)])
-      f['pref_vocab_size']  = np.array([len(corpus.dictionary.pref2idx)])
-      f['suff_vocab_size']  = np.array([len(corpus.dictionary.suff2idx)])
       f['post_vocab_size']  = np.array([len(corpus.dictionary.post2idx)])
 
       f['train_data']       = np.array(corpus.train['data'])
-      f['train_pref']       = np.array(corpus.train['pref'])
-      f['train_suff']       = np.array(corpus.train['suff'])
       f['train_post']       = np.array(corpus.train['post'])
       f['train_extr']       = np.array(corpus.train['extr'])
       f['train_location']   = np.array(corpus.train['location'])
 
       f['valid_data']       = np.array(corpus.valid['data'])
-      f['valid_pref']       = np.array(corpus.valid['pref'])
-      f['valid_suff']       = np.array(corpus.valid['suff'])
       f['valid_post']       = np.array(corpus.valid['post'])
       f['valid_extr']       = np.array(corpus.valid['extr'])
       f['valid_location']   = np.array(corpus.valid['location'])
 
       f['test_data']        = np.array(corpus.test['data'])
-      f['test_pref']        = np.array(corpus.test['pref'])
-      f['test_suff']        = np.array(corpus.test['suff'])
       f['test_post']        = np.array(corpus.test['post'])
       f['test_extr']        = np.array(corpus.test['extr'])
       f['test_location']    = np.array(corpus.test['location'])
 
       f['control_data']     = np.array(corpus.control['data'])
-      f['control_pref']     = np.array(corpus.control['pref'])
-      f['control_suff']     = np.array(corpus.control['suff'])
       f['control_post']     = np.array(corpus.control['post'])
       f['control_extr']     = np.array(corpus.control['extr'])
       f['control_location'] = np.array(corpus.control['location'])
