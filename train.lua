@@ -310,8 +310,8 @@ function test_model(saved_model_file)
     local inputs = tests_con
     local targets = tests_tar
     local answer = tests_ans
-    local outputs = model:forward({inputs, targets})
     local in_words = inputs[1][1]
+    local outputs = mask_attention(in_words, model:forward({inputs, targets}))
 
     local predictions = answer.new():resizeAs(answer):zero()
     local truth = {}
@@ -323,7 +323,7 @@ function test_model(saved_model_file)
         local max_word = 0
         for iw = 1, outputs:size(2) do
           local word = in_words[iw][b]
-          if word ~= 0 and puncs[word] == nil and stopwords[word] == nil then -- ignore punctuations & stop-words
+          if word ~= 0 then
             if word_to_prob[word] == nil then
               word_to_prob[word] = 0
             end
@@ -530,19 +530,18 @@ function build_model()
       -- nng_Theta2 = Theta2({nng_Yd2, nng_U2}):annotate({name = 'Theta2', description = 'unary potentials'})
       nng_Theta  = Theta({nng_Yd, nng_U}):annotate({name = 'Theta', description = 'unary potentials'})
       nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
-      nng_A = Attention(nng_CRF):annotate({name = 'Attention', description = 'attention on context tokens'})
-      lm = nn.gModule({x_inp, q_inp}, {nng_A})
+      lm = nn.gModule({x_inp, q_inp}, {nng_CRF})
 
     elseif opt.model == 'asr' or opt.model == 'ga' then
 
       Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
 
       nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-      nng_A = nn.SoftMax()(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
     
       if opt.model ~= 'ga' then
-        lm = nn.gModule({x_inp, q_inp}, {nng_A})
+        lm = nn.gModule({x_inp, q_inp}, {nng_YdU})
       else
+        nng_A = nn.SoftMax()(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
         AttentionColumn = nn.Unsqueeze(3) -- batch x seqlen x 1
         URow = nn.Transpose({2,3}) -- batch x 1 x (2 * hiddensize)
         QHat = nn.Sequential():add(nn.ParallelTable():add(AttentionColumn):add(URow)):add(nn.MM()) -- batch x seqlen x (2 * hiddensize)
@@ -572,9 +571,8 @@ function build_model()
         nng_Yd3 = Yd3(nng_X2):annotate({name = 'Yd3', description = 'memory embeddings'})
         nng_U3 = U3(q_inp):annotate({name = 'u3', description = 'query embeddings'})
         nng_YdU3 = Joint3({nng_Yd3, nng_U3}):annotate({name = 'Joint3', description = 'Yd * U'})
-        nng_A3 = nn.SoftMax()(nng_YdU3):annotate({name = 'Attention3', description = 'attention on query & context dot-product'})    
         
-        lm = nn.gModule({x_inp, q_inp}, {nng_A3})
+        lm = nn.gModule({x_inp, q_inp}, {nng_YdU3})
       end
     end
 
@@ -595,6 +593,8 @@ function build_model()
       print('Using pre-trained Glove word embeddings')
       lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
     end
+
+    attention_layer = nn.SoftMax() -- to be applied with some mask
   end
 
   if opt.profile then
@@ -610,7 +610,20 @@ function build_model()
 
   if opt.cuda then
     lm:cuda()
+    attention_layer:cuda()
   end
+end
+
+function mask_attention(in_context, outputs)
+  -- attention while masking out stopwords, punctuations
+  for i = 1, in_context:size(1) do -- seqlen
+    for j = 1, in_context:size(2) do -- batchsize
+      if puncs[in_context[i][j]] ~= nil or stopwords[in_context[i][j]] ~= nil then
+        outputs[i][j] = -math.huge
+      end
+    end
+  end
+  return attention_layer:forward(outputs)
 end
 
 function train(params, grad_params, epoch)
@@ -642,7 +655,8 @@ function train(params, grad_params, epoch)
        grad_params:zero()
 
       -- forward
-      local outputs = lm:forward({inputs, targets})
+      local outputs_pre = lm:forward({inputs, targets})
+      local outputs = mask_attention(inputs[1][1], outputs_pre)
 
       if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
         -- print('inputs')
@@ -761,6 +775,7 @@ function train(params, grad_params, epoch)
       end
 
       -- backward 
+      grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
       lm:zeroGradParameters()
       lm:backward({inputs, targets}, grad_outputs)
       
@@ -818,7 +833,7 @@ function validate(ntrial, epoch)
     local inputs = valid_con
     local targets = valid_tar
     local answer_inds = valid_ans_ind
-    local outputs = lm:forward({inputs, targets})
+    local outputs = mask_attention(inputs[1][1], lm:forward({inputs, targets}))
     local err = 0
     for ib = 1, opt.batchsize do
       local prob_answer = 0

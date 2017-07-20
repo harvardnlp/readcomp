@@ -117,7 +117,6 @@ class Corpus(object):
     self.args_verbose_level = args_verbose_level
     self.context_target_separator = context_target_separator # special separator token to identify context and target
     self.answer_identifier = answer_identifier
-    self.puncstop_answer_count = 0
     self.dictify(vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file)
 
 
@@ -208,8 +207,6 @@ class Corpus(object):
     print_msg('Suffix Size: {}'.format(len(self.dictionary.suff2idx)), 1, self.args_verbose_level)
     print_msg('POS Size: {}'.format(len(self.dictionary.post2idx)), 1, self.args_verbose_level)
 
-    print_msg('\nCount of cases where answer is a punctuation symbol or stop word: ' + str(self.puncstop_answer_count), 1, self.args_verbose_level)
-
 
   def save(self, file_prefix):
     self.dictionary.write_to_file(file_prefix)
@@ -242,16 +239,19 @@ class Corpus(object):
   # update the ids, offsets, word counts, line counts
   def tokenize_file(self, file, data, training):
     num_lines_in_file = 0
+    puncstop_answer_count = 0
+
     with codecs.open(file, 'r', encoding='utf8') as f:
       for line in f:
         num_lines_in_file += 1
-        words = line.split()
-
+        
         sep = -1 # last index of word in the context
+
         if self.context_target_separator:
           if num_lines_in_file == 1:
             print_msg('INFO: Using context-query-answer separator token = {}'.format(self.context_target_separator), 1, self.args_verbose_level)
 
+          words = line.split()
           sep = words.index(self.context_target_separator) - 1
           if sep <= 2:
             print_msg('INFO: SKIPPING... Context should contain at least 2 tokens, line = {}'.format(line), 2, self.args_verbose_level)
@@ -266,20 +266,29 @@ class Corpus(object):
 
           num_words = len(words)
         else:
+          sentences = nltk.sent_tokenize(line)
+          num_sentences = len(sentences)
+          if num_sentences < 2:
+            print_msg('INFO: SKIPPING... Paragraph must contain at least 2 sentences, line = {}'.format(line), 2, self.args_verbose_level)
+            continue
+          words = []
+          for s in range(num_sentences):
+            words.extend(sentences[s].split())
+            if s == num_sentences - 2:
+              sep = len(words) - 1
           num_words = len(words)
-          for i in range(num_words - 2, -1, -1):
-            if words[i] in end_words:
-              sep = i
-              break
 
         pos_tags = [t[1] for t in nltk.pos_tag(words)]
+
+        answer = words[num_words - 1]
+        self.dictionary.add_word(answer) # make sure the answer is in vocab
+
+        if answer in self.dictionary.punc2idx or answer in self.dictionary.stop2idx:
+          puncstop_answer_count += 1
 
         if training:
           # make sure answer is part of context (for computing loss & gradients during training)
           found_answer = False
-          answer = words[num_words - 1]
-          if answer in self.dictionary.punc2idx or answer in self.dictionary.stop2idx:
-            self.puncstop_answer_count += 1
           for i in range(0, sep + 1):
             if answer == words[i]:
               found_answer = True
@@ -349,3 +358,5 @@ class Corpus(object):
           data['extr'].append(np.array(extra_features))
 
         print_msg('Processed {} lines'.format(num_lines_in_file), 3, self.args_verbose_level)
+
+    print_msg('\nCount of cases where answer is a punctuation symbol or stop word: ' + str(puncstop_answer_count), 1, self.args_verbose_level)
