@@ -7,8 +7,6 @@ UNKNOWN = '<unk>'
 GLOVE_DIM = 100
 SEPARATOR = '<sep>'
 end_words  = { "?", "??", "???", "!", "!!", "!!!", ".", "?!", "!?" }
-MIN_TARGET_LENGTH = 10
-MIN_CONTEXT_LENGTH = 10
 
 def print_msg(message, verbose_level, args_verbose_level):
   if args_verbose_level >= verbose_level:
@@ -200,6 +198,7 @@ class Corpus(object):
     with codecs.open(file, 'r', encoding='utf8') as f:
       for line in f:
         num_lines_in_file += 1
+        words = line.split()
         
         sep = -1 # last index of word in the context
 
@@ -207,7 +206,6 @@ class Corpus(object):
           if num_lines_in_file == 1:
             print_msg('INFO: Using context-query-answer separator token = {}'.format(self.context_target_separator), 1, self.args_verbose_level)
 
-          words = line.split()
           sep = words.index(self.context_target_separator) - 1
           if sep <= 2:
             print_msg('INFO: SKIPPING... Context should contain at least 2 tokens, line = {}'.format(line), 2, self.args_verbose_level)
@@ -222,28 +220,14 @@ class Corpus(object):
 
           num_words = len(words)
         else:
-          sentences = nltk.sent_tokenize(line)
-          num_sentences = len(sentences)
-          if num_sentences < 2:
-            print_msg('INFO: SKIPPING... Paragraph must contain at least 2 sentences, line = {}'.format(line), 2, self.args_verbose_level)
-            continue
-          words = []
-          sentence_lengths = []
-          for s in range(num_sentences):
-            sw = sentences[s].split()
-            words.extend(sw)
-            sentence_lengths.append(len(sw))
-          
           num_words = len(words)
-          context_length = 0
-          for s in range(num_sentences):
-            context_length += sentence_lengths[s]
-            if num_words - context_length <= MIN_TARGET_LENGTH:
+          for i in range(num_words - 2, -1, -1):
+            if words[i] in end_words:
+              if words[i + 1] == "'" or words[i + 1] == "''":
+                sep = i + 1
+              else:
+                sep = i
               break
-            sep = context_length - 1
-          if sep + 1 < MIN_CONTEXT_LENGTH:
-            print_msg('INFO: SKIPPING... Context is shorter than min length {}, line = {}'.format(MIN_CONTEXT_LENGTH, line), 2, self.args_verbose_level)
-            continue
 
         pos_tags = [t[1] for t in nltk.pos_tag(words)]
 
