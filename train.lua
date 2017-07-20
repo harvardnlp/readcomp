@@ -614,27 +614,28 @@ function build_model()
   end
 end
 
-function mask_attention(in_context, outputs)
+function mask_attention(input_context, output_pre_attention)
   -- attention while masking out stopwords, punctuations
-  for i = 1, in_context:size(1) do -- seqlen
-    for j = 1, in_context:size(2) do -- batchsize
-      if puncs[in_context[i][j]] ~= nil or stopwords[in_context[i][j]] ~= nil then
-        outputs[i][j] = -math.huge
+  for i = 1, input_context:size(1) do -- seqlen
+    for j = 1, input_context:size(2) do -- batchsize
+      if puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
+        output_pre_attention[j][i] = -math.huge
       end
     end
   end
-  return attention_layer:forward(outputs)
+  return attention_layer:forward(output_pre_attention)
 end
 
-function mask_attention_gradients(in_context, grad_outputs)
-  for i = 1, in_context:size(1) do -- seqlen
-    for j = 1, in_context:size(2) do -- batchsize
-      if puncs[in_context[i][j]] ~= nil or stopwords[in_context[i][j]] ~= nil then
-        grad_outputs[i][j] = 0
+function mask_attention_gradients(input_context, output_grad)
+  -- input_context is seqlen x batchsize
+  -- output_grad is batchsize x seqlen
+  for i = 1, input_context:size(1) do
+    for j = 1, input_context:size(2) do
+      if puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
+        output_grad[j][i] = 0
       end
     end
   end
-  return attention_layer:forward(outputs)
 end
 
 function train(params, grad_params, epoch)
@@ -723,7 +724,7 @@ function train(params, grad_params, epoch)
       local a = torch.Timer()
       local err = 0
       for ib = 1, opt.batchsize do
-        if answers[ib] > 0 then -- skip 0-padded examples
+        if answers[ib] > 0 and puncs[answers[ib]] == nil and stopwords[answers[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers
           local prob_answer = 0
           for ians = 1, #answer_inds[ib] do
             prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
@@ -734,9 +735,9 @@ function train(params, grad_params, epoch)
             print(answer_inds[ib])
             print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]] .. ', ib = ' .. ib)
             print('inputs')
-            print(inputs[{{}, ib}]:contiguous():view(1,-1))
+            print(inputs[1][1][{{}, ib}]:contiguous():view(1,-1))
             print('targets')
-            print(targets[1][{{}, ib}]:contiguous():view(1,-1))
+            print(targets[1][1][{{}, ib}]:contiguous():view(1,-1))
             print('outputs')
             print(outputs[ib]:view(1,-1))
               
@@ -787,8 +788,8 @@ function train(params, grad_params, epoch)
 
       -- backward 
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
-      grad_outputs = mask_attention_gradients(inputs[1][1], grad_outputs)
-      
+      mask_attention_gradients(inputs[1][1], grad_outputs)
+
       lm:zeroGradParameters()
       lm:backward({inputs, targets}, grad_outputs)
       
@@ -849,11 +850,13 @@ function validate(ntrial, epoch)
     local outputs = mask_attention(inputs[1][1], lm:forward({inputs, targets}))
     local err = 0
     for ib = 1, opt.batchsize do
-      local prob_answer = 0
-      for ians = 1, #answer_inds[ib] do
-        prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
+      if valid_ans[ib] > 0 and puncs[valid_ans[ib]] == nil and stopwords[valid_ans[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers
+        local prob_answer = 0
+        for ians = 1, #answer_inds[ib] do
+          prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
+        end
+        err = err - torch.log(prob_answer)
       end
-      err = err - torch.log(prob_answer)
     end
     sumErr = sumErr + err
 
