@@ -626,6 +626,17 @@ function mask_attention(in_context, outputs)
   return attention_layer:forward(outputs)
 end
 
+function mask_attention_gradients(in_context, grad_outputs)
+  for i = 1, in_context:size(1) do -- seqlen
+    for j = 1, in_context:size(2) do -- batchsize
+      if puncs[in_context[i][j]] ~= nil or stopwords[in_context[i][j]] ~= nil then
+        grad_outputs[i][j] = 0
+      end
+    end
+  end
+  return attention_layer:forward(outputs)
+end
+
 function train(params, grad_params, epoch)
   local num_examples = data.train_location:size(1)
   local all_batches = torch.range(1, num_examples, opt.batchsize)
@@ -776,6 +787,8 @@ function train(params, grad_params, epoch)
 
       -- backward 
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
+      grad_outputs = mask_attention_gradients(inputs[1][1], grad_outputs)
+      
       lm:zeroGradParameters()
       lm:backward({inputs, targets}, grad_outputs)
       
