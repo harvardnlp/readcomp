@@ -7,7 +7,8 @@ UNKNOWN = '<unk>'
 GLOVE_DIM = 100
 SEPARATOR = '<sep>'
 end_words  = { "?", "??", "???", "!", "!!", "!!!", ".", "?!", "!?" }
-
+MIN_TARGET_LENGTH = 10
+MIN_CONTEXT_LENGTH = 10
 
 def print_msg(message, verbose_level, args_verbose_level):
   if args_verbose_level >= verbose_level:
@@ -227,11 +228,22 @@ class Corpus(object):
             print_msg('INFO: SKIPPING... Paragraph must contain at least 2 sentences, line = {}'.format(line), 2, self.args_verbose_level)
             continue
           words = []
+          sentence_lengths = []
           for s in range(num_sentences):
-            words.extend(sentences[s].split())
-            if s == num_sentences - 2:
-              sep = len(words) - 1
+            sw = sentences[s].split()
+            words.extend(sw)
+            sentence_lengths.append(len(sw))
+          
           num_words = len(words)
+          context_length = 0
+          for s in range(num_sentences):
+            context_length += sentence_lengths[s]
+            if num_words - context_length <= MIN_TARGET_LENGTH:
+              break
+            sep = context_length - 1
+          if sep + 1 < MIN_CONTEXT_LENGTH:
+            print_msg('INFO: SKIPPING... Context is shorter than min length {}, line = {}'.format(MIN_CONTEXT_LENGTH, line), 2, self.args_verbose_level)
+            continue
 
         pos_tags = [t[1] for t in nltk.pos_tag(words)]
 
