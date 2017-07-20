@@ -63,7 +63,7 @@ local opt = cmd:parse(arg or {})
 opt.hiddensize = loadstring(" return "..opt.hiddensize)()
 opt.adamconfig = loadstring(" return "..opt.adamconfig)()
 opt.inputsize = opt.inputsize == -1 and opt.hiddensize[1] or opt.inputsize
-opt.id = opt.id == '' and ('lambada' .. ':' .. dl.uniqueid()) or opt.id
+opt.id = opt.id == '' and (paths.basename(opt.datafile, paths.extname(opt.datafile)) .. '-' .. opt.model) or opt.id
 opt.version = 6 -- better NCE bias initialization + new default hyper-params
 if not opt.silent then
   table.print(opt)
