@@ -21,7 +21,7 @@ cmd:text('Example:')
 cmd:text("th train.lua --progress --earlystop 50 --cuda --device 2 --maxseqlen 1024 --hiddensize '{200,200}' --batchsize 20 --uniform 0.1 --cutoff 5")
 cmd:text('Options:')
 -- training
-cmd:option('--model', 'crf', 'type of models to train, acceptable values: {crf, asr ,ga}')
+cmd:option('--model', 'asr', 'type of models to train, acceptable values: {crf, asr ,ga}')
 cmd:option('--gahop', 3, 'number of hops in gated attention model')
 cmd:option('--adamconfig', '{0, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
