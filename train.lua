@@ -39,11 +39,11 @@ cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution b
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
-cmd:option('--postsize', 20, 'size of pos_tag embeddings')
+cmd:option('--postsize', 80, 'size of pos_tag embeddings')
 cmd:option('--hiddensize', '{128}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
 cmd:option('--rnntype', 'gru', 'type of rnn to use for encoding context and query, acceptable values: rnn/lstm')
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
-cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
+cmd:option('--dropout', 0.1, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
 cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
