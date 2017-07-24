@@ -294,6 +294,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     batch_size = metadata.opt.batchsize
     model = metadata.model
     puncs = metadata.puncs -- punctuations
+    attention_layer = nn.SoftMax()
   end
 
   model:forget()
