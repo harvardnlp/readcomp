@@ -295,6 +295,9 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     model = metadata.model
     puncs = metadata.puncs -- punctuations
     attention_layer = nn.SoftMax()
+    if opt.cuda then
+      attention_layer:cuda()
+    end
   end
 
   model:forget()
