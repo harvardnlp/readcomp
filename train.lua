@@ -282,7 +282,7 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   return contexts, targets, answer, answer_ind
 end
 
-function test_model(saved_model_file)
+function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tensor_extr, tensor_location)
   local metadata
   local batch_size = opt.batchsize
   local model = lm
@@ -299,13 +299,19 @@ function test_model(saved_model_file)
   model:forget()
   model:evaluate()
 
-  local all_batches = torch.range(1, data.test_location:size(1), opt.batchsize)
+  dump_name       = dump_name       and dump_name       or 'test'
+  tensor_data     = tensor_data     and tensor_data     or data.test_data
+  tensor_post     = tensor_post     and tensor_post     or data.test_post
+  tensor_extr     = tensor_extr     and tensor_extr     or data.test_extr
+  tensor_location = tensor_location and tensor_location or data.test_location
+
+  local all_batches = torch.range(1, tensor_location:size(1), opt.batchsize)
   local ntestbatches = all_batches:size(1)
 
   local correct = 0
   local num_examples = 0
   for i = 1, ntestbatches do
-    local tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_post, data.test_extr, data.test_location, false, all_batches[i])
+    local tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(tensor_data, tensor_post, tensor_extr, tensor_location, false, all_batches[i])
 
     local inputs = tests_con
     local targets = tests_tar
@@ -344,7 +350,7 @@ function test_model(saved_model_file)
     end
 
     if saved_model_file then
-      local out_dump_file = string.format('%s.%03d.dump', saved_model_file, i)
+      local out_dump_file = string.format('%s.%s.%03d.dump', saved_model_file, dump_name, i)
       local out_file = hdf5.open(out_dump_file, 'w')
       local inp = in_words:long()
       local tap = targets[1][1]:long()
@@ -368,14 +374,6 @@ function test_model(saved_model_file)
 
   local accuracy = correct / num_examples
   print('Test Accuracy = '..accuracy..' ('..correct..' out of '..num_examples..')')
-
-  local test_result = {}
-  test_result.accuracy = accuracy
-  test_result.perplexity = perplexity
-
-  local test_result_file = model_file..'.testresult'
-  print('Saving test result file to '..test_result_file)
-  torch.save(test_result_file, test_result)
 
   collect_track_garbage()
 end
@@ -917,6 +915,7 @@ extr_size = data.train_extr:size(2)
 
 if #opt.testmodel > 0 then
   test_model(opt.testmodel)
+  test_model(opt.testmodel, 'analysis', data.analysis_data, data.analysis_post, data.analysis_extr, data.analysis_location)
   os.exit()
 end
 

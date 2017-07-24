@@ -165,6 +165,8 @@ def main(arguments):
                       help='relative location (file or folder) of testing data')
   parser.add_argument('--control', type=str, default='control.txt',
                       help='relative location (file or folder) of control data')
+  parser.add_argument('--analysis', type=str, default='analysis.txt',
+                      help='relative location (file or folder) of category-analysis data')
   parser.add_argument('--vocab', type=str, default='vocab.txt',
                       help='relative location of vocab file')
   parser.add_argument('--extra_vocab', type=str, default=None,
@@ -206,7 +208,7 @@ def main(arguments):
     else:
       corpus = datamodel.Corpus(args.verbose_level, args.data + args.vocab, None, None, args.data + args.punctuations, 
         args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None, args.context_query_separator, args.answer_identifier)
-    corpus.load(args.data, args.train, args.valid, args.test, args.control)
+    corpus.load(args.data, args.train, args.valid, args.test, args.control, args.analysis)
     corpus.save(out_vocab_file_prefix)
 
     with h5py.File(args.out_file, "w") as f:
@@ -234,6 +236,11 @@ def main(arguments):
       f['control_post']     = np.array(corpus.control['post'])
       f['control_extr']     = np.array(corpus.control['extr'])
       f['control_location'] = np.array(corpus.control['location'])
+
+      f['analysis_data']     = np.array(corpus.analysis['data'])
+      f['analysis_post']     = np.array(corpus.analysis['post'])
+      f['analysis_extr']     = np.array(corpus.analysis['extr'])
+      f['analysis_location'] = np.array(corpus.analysis['location'])
 
       if corpus.embeddings != None:
         f['word_embeddings'] = np.array(corpus.embeddings)

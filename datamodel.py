@@ -140,7 +140,7 @@ class Corpus(object):
     self.dictionary.read_from_file(vocab_file_prefix)
 
 
-  def load(self, path, train, valid, test, control):
+  def load(self, path, train, valid, test, control, analysis):
     print_msg('Loading train data ...', 1, self.args_verbose_level)
     self.train   = self.tokenize(os.path.join(path, train),   training = True)
     print_msg('Loading validation data...', 1, self.args_verbose_level)
@@ -149,6 +149,8 @@ class Corpus(object):
     self.test    = self.tokenize(os.path.join(path, test),    training = False)
     print_msg('Loading control data...', 1, self.args_verbose_level)
     self.control = self.tokenize(os.path.join(path, control), training = False)
+    print_msg('Loading analysis data...', 1, self.args_verbose_level)
+    self.analysis = self.tokenize(os.path.join(path, analysis), training = False)
 
     print_msg('\nTraining Data Statistics:\n', 1, self.args_verbose_level)
     train_context_length = self.train['location'][:,1]
