@@ -45,7 +45,7 @@ cmd:option('--rnntype', 'gru', 'type of rnn to use for encoding context and quer
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
 cmd:option('--dropout', 0.1, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
-cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
+cmd:option('--datafile', 'lambada.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 64, 'number of examples per batch')
 cmd:option('--savepath', 'models', 'path to directory where experiment log (includes model) will be saved')
