@@ -51,7 +51,7 @@ def main(arguments):
       formatter_class=argparse.RawDescriptionHelpFormatter) 
   parser.add_argument('--model_dump_pattern', type=str, default='data\\dump\\*.dump',
                       help='file pattern of model dumps for analysis')
-  parser.add_argument('--out_vocab_file_prefix', type=str, default='lambada-asr',
+  parser.add_argument('--out_vocab_file_prefix', type=str, default='lambada',
                       help='file name prefix of vocab files')
   parser.add_argument('--in_context_only', action='store_true',
                       help='whether to process only instances where answer is in context')
