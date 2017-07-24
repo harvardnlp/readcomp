@@ -914,7 +914,9 @@ post_vocab_size = data.post_vocab_size[1]
 extr_size = data.train_extr:size(2)
 
 if #opt.testmodel > 0 then
+  print("Processing test set")
   test_model(opt.testmodel)
+  print("Processing analysis set")
   test_model(opt.testmodel, 'analysis', data.analysis_data, data.analysis_post, data.analysis_extr, data.analysis_location)
   os.exit()
 end
