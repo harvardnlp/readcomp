@@ -53,7 +53,7 @@ cmd:option('--id', '', 'id string of this experiment (used to name output file) 
 cmd:option('--evalheuristics', false, 'evaluate heuristics approach e.g. random selection from context, most likely')
 cmd:option('--dontsave', false, 'dont save the model')
 cmd:option('--verbose', false, 'print verbose diagnostics messages')
-cmd:option('--randomseed', 1, 'random seed')
+cmd:option('--randomseed', 101, 'random seed')
 
 -- unit test
 cmd:option('--unittest', false, 'enable unit tests')
