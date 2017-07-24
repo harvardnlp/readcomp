@@ -288,14 +288,33 @@ class Corpus(object):
               if num_lines_in_file == 1 and i == 0:
                 print_msg('INFO: Using answer identifier token = {}'.format(self.answer_identifier), 1, self.args_verbose_level)
               answer_index = words.index(self.answer_identifier)
-              # make sure the previous and next bigrams of the token are actually in the context
+
+              # make sure the previous and next ngrams of the token are actually in the context
               # and vice versa for the target answer 
+              if i > 1 and answer_index > sep + 1 and words[i - 1] == words[answer_index - 1]:
+                bigram_match = 1
+              elif i <= sep - 1 and answer_index < num_words - 2 and words[i + 1] == words[answer_index + 1]:
+                bigram_match = 1
+
               if i > 2 and answer_index > sep + 2 and words[i - 2] == words[answer_index - 2] and words[i - 1] == words[answer_index - 1]:
-                bigram_match = 1
+                bigram_match = 2
               elif i <= sep - 2 and answer_index < num_words - 3 and words[i + 1] == words[answer_index + 1] and words[i + 2] == words[answer_index + 2]:
-                bigram_match = 1
+                bigram_match = 2
+
+              if i > 3 and answer_index > sep + 3 and words[i - 3] == words[answer_index - 3] and words[i - 2] == words[answer_index - 2] and words[i - 1] == words[answer_index - 1]:
+                bigram_match = 3
+              elif i <= sep - 3 and answer_index < num_words - 4 and words[i + 1] == words[answer_index + 1] and words[i + 2] == words[answer_index + 2]  and words[i + 3] == words[answer_index + 3]:
+                bigram_match = 3
+
             else: # if not assume the location is at the end (e.g. LAMBADA)
-              bigram_match = 1 if i > 2 and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2] else 0 
+              if i > 1 and words[i - 1] == words[num_words - 2]:
+                bigram_match = 1
+
+              if i > 2 and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2]:
+                bigram_match = 2
+
+              if i > 3 and words[i - 3] == words[num_words - 4] and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2]:
+                bigram_match = 3
 
           extra_features.append(freq)
           extra_features.append(bigram_match)
