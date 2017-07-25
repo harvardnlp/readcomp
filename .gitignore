@@ -6,3 +6,5 @@ word_to_idx.csv
 stat.py
 test*
 **/sweep-*
+models
+results

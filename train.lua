@@ -21,7 +21,7 @@ cmd:text('Example:')
 cmd:text("th train.lua --progress --earlystop 50 --cuda --device 2 --maxseqlen 1024 --hiddensize '{200,200}' --batchsize 20 --uniform 0.1 --cutoff 5")
 cmd:text('Options:')
 -- training
-cmd:option('--model', 'crf', 'type of models to train, acceptable values: {crf, asr ,ga}')
+cmd:option('--model', 'asr', 'type of models to train, acceptable values: {crf, asr ,ga}')
 cmd:option('--gahop', 3, 'number of hops in gated attention model')
 cmd:option('--adamconfig', '{0, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
@@ -35,17 +35,18 @@ cmd:option('--maxseqlen', 1024, 'maximum sequence length for context and target'
 cmd:option('--earlystop', 5, 'maximum number of epochs to wait to find a better local minima for early-stopping')
 cmd:option('--progress', false, 'print progress bar')
 cmd:option('--silent', false, 'don\'t print anything to stdout')
+cmd:option('--lr', 0.001, 'learning rate')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
-cmd:option('--postsize', 20, 'size of pos_tag embeddings')
+cmd:option('--postsize', 80, 'size of pos_tag embeddings')
 cmd:option('--hiddensize', '{128}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
 cmd:option('--rnntype', 'gru', 'type of rnn to use for encoding context and query, acceptable values: rnn/lstm')
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
-cmd:option('--dropout', 0, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
+cmd:option('--dropout', 0.1, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
-cmd:option('--datafile', 'lambada-asr.hdf5', 'the preprocessed hdf5 data file')
+cmd:option('--datafile', 'lambada.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 64, 'number of examples per batch')
 cmd:option('--savepath', 'models', 'path to directory where experiment log (includes model) will be saved')
@@ -53,7 +54,7 @@ cmd:option('--id', '', 'id string of this experiment (used to name output file) 
 cmd:option('--evalheuristics', false, 'evaluate heuristics approach e.g. random selection from context, most likely')
 cmd:option('--dontsave', false, 'dont save the model')
 cmd:option('--verbose', false, 'print verbose diagnostics messages')
-cmd:option('--randomseed', 1, 'random seed')
+cmd:option('--randomseed', 101, 'random seed')
 
 -- unit test
 cmd:option('--unittest', false, 'enable unit tests')
@@ -282,7 +283,7 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   return contexts, targets, answer, answer_ind
 end
 
-function test_model(saved_model_file)
+function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tensor_extr, tensor_location)
   local metadata
   local batch_size = opt.batchsize
   local model = lm
@@ -294,18 +295,28 @@ function test_model(saved_model_file)
     batch_size = metadata.opt.batchsize
     model = metadata.model
     puncs = metadata.puncs -- punctuations
+    attention_layer = nn.SoftMax()
+    if opt.cuda then
+      attention_layer:cuda()
+    end
   end
 
   model:forget()
   model:evaluate()
 
-  local all_batches = torch.range(1, data.test_location:size(1), opt.batchsize)
+  dump_name       = dump_name       and dump_name       or 'test'
+  tensor_data     = tensor_data     and tensor_data     or data.test_data
+  tensor_post     = tensor_post     and tensor_post     or data.test_post
+  tensor_extr     = tensor_extr     and tensor_extr     or data.test_extr
+  tensor_location = tensor_location and tensor_location or data.test_location
+
+  local all_batches = torch.range(1, tensor_location:size(1), opt.batchsize)
   local ntestbatches = all_batches:size(1)
 
   local correct = 0
   local num_examples = 0
   for i = 1, ntestbatches do
-    local tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(data.test_data, data.test_post, data.test_extr, data.test_location, false, all_batches[i])
+    local tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(tensor_data, tensor_post, tensor_extr, tensor_location, false, all_batches[i])
 
     local inputs = tests_con
     local targets = tests_tar
@@ -344,7 +355,7 @@ function test_model(saved_model_file)
     end
 
     if saved_model_file then
-      local out_dump_file = string.format('%s.%03d.dump', saved_model_file, i)
+      local out_dump_file = string.format('%s.%s.%03d.dump', saved_model_file, dump_name, i)
       local out_file = hdf5.open(out_dump_file, 'w')
       local inp = in_words:long()
       local tap = targets[1][1]:long()
@@ -368,14 +379,6 @@ function test_model(saved_model_file)
 
   local accuracy = correct / num_examples
   print('Test Accuracy = '..accuracy..' ('..correct..' out of '..num_examples..')')
-
-  local test_result = {}
-  test_result.accuracy = accuracy
-  test_result.perplexity = perplexity
-
-  local test_result_file = model_file..'.testresult'
-  print('Saving test result file to '..test_result_file)
-  torch.save(test_result_file, test_result)
 
   collect_track_garbage()
 end
@@ -802,7 +805,7 @@ function train(params, grad_params, epoch)
        return err, grad_params
     end
 
-    local _, loss = optim.adam(feval, params, opt.adamconfig)
+    local _, loss = optim.adam(feval, params, adamconfig)
 
     if opt.progress then
       xlua.progress(ir, nbatches)
@@ -916,7 +919,10 @@ post_vocab_size = data.post_vocab_size[1]
 extr_size = data.train_extr:size(2)
 
 if #opt.testmodel > 0 then
+  print("Processing test set")
   test_model(opt.testmodel)
+  print("Processing analysis set")
+  test_model(opt.testmodel, 'analysis', data.analysis_data, data.analysis_post, data.analysis_extr, data.analysis_location)
   os.exit()
 end
 
@@ -959,6 +965,11 @@ local ntrial = 0
 
 local epoch = xplog.epoch+1
 local params, grad_params = lm:getParameters()
+local adamconfig = {
+   beta1 = opt.adamconfig[1],
+   beta2 = opt.adamconfig[2],
+   learningRate = opt.lr
+}
 
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
