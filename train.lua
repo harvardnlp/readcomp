@@ -35,6 +35,7 @@ cmd:option('--maxseqlen', 1024, 'maximum sequence length for context and target'
 cmd:option('--earlystop', 5, 'maximum number of epochs to wait to find a better local minima for early-stopping')
 cmd:option('--progress', false, 'print progress bar')
 cmd:option('--silent', false, 'don\'t print anything to stdout')
+cmd:option('--lr', 0.001, 'learning rate')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
@@ -804,7 +805,7 @@ function train(params, grad_params, epoch)
        return err, grad_params
     end
 
-    local _, loss = optim.adam(feval, params, opt.adamconfig)
+    local _, loss = optim.adam(feval, params, adamconfig)
 
     if opt.progress then
       xlua.progress(ir, nbatches)
@@ -964,6 +965,11 @@ local ntrial = 0
 
 local epoch = xplog.epoch+1
 local params, grad_params = lm:getParameters()
+local adamconfig = {
+   beta1 = opt.adamconfig[1],
+   beta2 = opt.adamconfig[2],
+   learningRate = opt.lr
+}
 
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
