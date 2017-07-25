@@ -23,7 +23,6 @@ cmd:text('Options:')
 -- training
 cmd:option('--model', 'asr', 'type of models to train, acceptable values: {crf, asr ,ga}')
 cmd:option('--gahop', 3, 'number of hops in gated attention model')
-cmd:option('--adamconfig', '{0.9, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
 cmd:option('--cuda', false, 'use CUDA')
 cmd:option('--device', 1, 'sets the device (GPU) to use')
@@ -35,7 +34,6 @@ cmd:option('--maxseqlen', 1024, 'maximum sequence length for context and target'
 cmd:option('--earlystop', 5, 'maximum number of epochs to wait to find a better local minima for early-stopping')
 cmd:option('--progress', false, 'print progress bar')
 cmd:option('--silent', false, 'don\'t print anything to stdout')
-cmd:option('--lr', 0.001, 'learning rate')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 -- rnn layer 
@@ -62,7 +60,6 @@ cmd:option('--unittest', false, 'enable unit tests')
 cmd:text()
 local opt = cmd:parse(arg or {})
 opt.hiddensize = loadstring(" return "..opt.hiddensize)()
-opt.adamconfig = loadstring(" return "..opt.adamconfig)()
 opt.inputsize = opt.inputsize == -1 and opt.hiddensize[1] or opt.inputsize
 opt.id = opt.id == '' and (paths.basename(opt.datafile, paths.extname(opt.datafile)) .. '-' .. opt.model) or opt.id
 opt.version = 6 -- better NCE bias initialization + new default hyper-params
@@ -805,7 +802,7 @@ function train(params, grad_params, epoch)
        return err, grad_params
     end
 
-    local _, loss = optim.adam(feval, params, adamconfig)
+    local _, loss = optim.adam(feval, params)
 
     if opt.progress then
       xlua.progress(ir, nbatches)
@@ -965,11 +962,6 @@ local ntrial = 0
 
 local epoch = xplog.epoch+1
 local params, grad_params = lm:getParameters()
-local adamconfig = {
-   beta1 = opt.adamconfig[1],
-   beta2 = opt.adamconfig[2],
-   learningRate = opt.lr
-}
 
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
