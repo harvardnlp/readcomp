@@ -618,7 +618,7 @@ function mask_attention(input_context, output_pre_attention)
   -- attention while masking out stopwords, punctuations
   for i = 1, input_context:size(1) do -- seqlen
     for j = 1, input_context:size(2) do -- batchsize
-      if puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
+      if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
         output_pre_attention[j][i] = -math.huge
       end
     end
@@ -631,7 +631,7 @@ function mask_attention_gradients(input_context, output_grad)
   -- output_grad is batchsize x seqlen
   for i = 1, input_context:size(1) do
     for j = 1, input_context:size(2) do
-      if puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
+      if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
         output_grad[j][i] = 0
       end
     end
