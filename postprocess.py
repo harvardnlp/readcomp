@@ -71,8 +71,14 @@ def main(arguments):
   corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None)
   corpus.load_vocab(args.out_vocab_file_prefix)
   idx2word = corpus.dictionary.idx2word
+  word2idx = corpus.dictionary.word2idx
 
   category_labels = {}
+  contexts = []
+
+  analysis_category_correct = {}
+  analysis_category_count = {}
+
   if len(args.analysis_category_file):
 
     with codecs.open(args.analysis_category_file, 'r', encoding='utf8') as acf:
@@ -80,24 +86,34 @@ def main(arguments):
       categories = []
       counts = []
 
-      for h in headers:
-        hre = re.match('"(.*) ([0-9]+)"', h)
+      for h in range(1, len(headers)):
+        hre = re.match('"(.*) ([0-9]+)"', headers[h])
         category_name = hre.group(1).strip()
         category_labels[category_name] = []
         categories.append(category_name)
         counts.append(int(hre.group(2).strip()))
 
+        analysis_category_correct[category_name] = 0
+        analysis_category_count[category_name] = 0
+
       for line in acf:
         values = line.split('\t')
-        assert len(values) == len(categories) 'number of values {} does not match number of headers {}'.format(len(values), len(categories))
-        for i in range(len(values)):
-          category_labels[categories[i]].append(int(values[i]))
+        # hack: look up the example in analysis file using the first few words
+        contexts.append(' '.join([ str(word2idx[datamodel.UNKNOWN]) if v not in word2idx else str(word2idx[v]) for v in values[0].strip().split()[:10] ]))
+
+        assert len(values) - 1 == len(categories), 'number of values {} does not match number of headers {}'.format(len(values) - 1, len(categories))
+
+        for i in range(1, len(values)):
+          category_labels[categories[i - 1]].append(int(values[i].strip()))
 
       for i in range(len(categories)):
-        assert np.sum(category_labels[categories[i]]) == counts[i] 'category count mismatch for category {}'.format(categories[i])
+        assert np.sum(category_labels[categories[i]]) == counts[i], 'category count mismatch for category {}'.format(categories[i])
+
 
 
   for filename in sorted(glob.glob(args.model_dump_pattern), reverse = True): # work on shorter examples first
+    print 'Processing {}'.format(filename)
+
     with h5py.File(filename, "r") as f:
       inputs      = np.array(f['inputs'],      dtype=int)
       targets     = np.array(f['targets'],     dtype=int)
@@ -125,16 +141,49 @@ def main(arguments):
         if answers[b] != 0:
           if args.in_context_only and answers[b] not in ip[b]:
             continue
+
+          analysis_result = ''
+          if len(category_labels) > 0: # if there is analysis result for this file
+
+            analysis_index = -1
+            lookup = ' '.join([str(t) for t in inputs[:,b]])
+            for i in range(len(contexts)):
+              if contexts[i] in lookup:
+                analysis_index = i
+                break
+
+            assert analysis_index >= 0, 'Example not found in analysis result: {}'.format(lookup)
+
+            found_labels = []
+            for category in category_labels:
+              if category_labels[category][analysis_index] == 1:
+                found_labels.append(category)
+
+                analysis_category_count[category] += 1
+                if answers[b] == predictions[b]:
+                  analysis_category_correct[category] += 1
+
+
+            analysis_result = ' , '.join(found_labels)
+
           ax = plt.axes()
           sns.heatmap(op[b].reshape((dim1,dim2)), annot=labels[b].reshape((dim1,dim2)), fmt='', cmap='Blues', ax = ax)
           answer_indicator = r"$\bf{CORRECT}$" if answers[b] == predictions[b] else "Correct"
           answer_indicator = answer_indicator + ' (in context)' if answers[b] in ip[b] else answer_indicator
           target_sentence = ' '.join([idx2word[idx] if idx != 0 else '' for idx in targets[:,b]]).strip()
-          ax.set_title('{} = {}, Prediction = {}\nTarget = {}'.format(answer_indicator, idx2word[answers[b]], idx2word[predictions[b]], target_sentence))
+
+          title_text = '{} = {}, Prediction = {}\nTarget = {}'.format(answer_indicator, idx2word[answers[b]], idx2word[predictions[b]], target_sentence)
+          if len(analysis_result) > 0:
+              title_text += '\nExample Types:{{ {} }}'.format(analysis_result)
+          ax.set_title(title_text)
+
           # plt.show()
           savefig(filename + '.ex{}.png'.format(str(b).zfill(3)), bbox_inches='tight', dpi = 100)
           plt.clf()
 
+  for cat in category_labels:
+    print('Category: {}, Accuracy = {}% ({} out of {})'.format(
+      cat, analysis_category_correct[cat] * 100.0 / analysis_category_count[cat], analysis_category_correct[cat], analysis_category_count[cat]))
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))
