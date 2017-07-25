@@ -43,6 +43,13 @@ else
   gpu=$4
 fi
 
+if [ -z $5 ]; then
+  echo "number of gpus not specified, using 1"
+  numgpu=1
+else
+  numgpu=$5
+fi
+
 gpuid=0
 class=("asr")
 seed=(7 1 2 3 4 5 6 8 9 10 11 12 13 14 15 16 17 18)
@@ -59,7 +66,7 @@ for cls in "${class[@]}"; do
         for ad in "${adam[@]}"; do
           for c in "${cutoff[@]}"; do
             for pst in "${post[@]}"; do
-              gpuid=$((gpuid % 2 + 1))
+              gpuid=$((gpuid % numgpu + 1))
               if [ "$gpuid" = "$gpu" ]; then
                 printf "iteration = $t: th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig $ad --hiddensize {$d0} --postsize $pst --cutoff $c $extra\n" >> $OUTFILE
                 th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig "$ad" --hiddensize {$d0} --postsize $pst --cutoff $c $extra >> $OUTFILE

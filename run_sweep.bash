@@ -42,6 +42,6 @@ cp sweep.bash $OUTDIR/
 cp $codefile $OUTDIR/
 
 for (( i=1; i<=$NUMGPU; i++ )); do
-	bash $OUTDIR/sweep.bash "$OUTFILE.$i" "$2" "$OUTDIR/$codefile" $i &
+	bash $OUTDIR/sweep.bash "$OUTFILE.$i" "$2" "$OUTDIR/$codefile" $i $NUMGPU &
 done
 wait
