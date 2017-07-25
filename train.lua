@@ -365,6 +365,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
       out_file:write('outputs', out)
       out_file:write('predictions', predictions)
       out_file:write('answers', answer)
+      out_file:write('locations', tensor_location)
       out_file:close()
     end
 

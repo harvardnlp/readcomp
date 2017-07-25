@@ -51,6 +51,8 @@ def main(arguments):
       formatter_class=argparse.RawDescriptionHelpFormatter) 
   parser.add_argument('--model_dump_pattern', type=str, default='data\\dump\\*.dump',
                       help='file pattern of model dumps for analysis')
+  parser.add_argument('--analysis_category_file', type=str, default='',
+                      help='absolute path of analysis-category file')
   parser.add_argument('--out_vocab_file_prefix', type=str, default='lambada',
                       help='file name prefix of vocab files')
   parser.add_argument('--in_context_only', action='store_true',
@@ -69,6 +71,31 @@ def main(arguments):
   corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None)
   corpus.load_vocab(args.out_vocab_file_prefix)
   idx2word = corpus.dictionary.idx2word
+
+  category_labels = {}
+  if len(args.analysis_category_file):
+
+    with codecs.open(args.analysis_category_file, 'r', encoding='utf8') as acf:
+      headers = acf.readline().split('\t')
+      categories = []
+      counts = []
+
+      for h in headers:
+        hre = re.match('"(.*) ([0-9]+)"', h)
+        category_name = hre.group(1).strip()
+        category_labels[category_name] = []
+        categories.append(category_name)
+        counts.append(int(hre.group(2).strip()))
+
+      for line in acf:
+        values = line.split('\t')
+        assert len(values) == len(categories) 'number of values {} does not match number of headers {}'.format(len(values), len(categories))
+        for i in range(len(values)):
+          category_labels[categories[i]].append(int(values[i]))
+
+      for i in range(len(categories)):
+        assert np.sum(category_labels[categories[i]]) == counts[i] 'category count mismatch for category {}'.format(categories[i])
+
 
   for filename in sorted(glob.glob(args.model_dump_pattern), reverse = True): # work on shorter examples first
     with h5py.File(filename, "r") as f:
