@@ -785,7 +785,7 @@ function train(params, grad_params, epoch)
             end
           end
 
-          outputs:foo() -- intentionally break
+          outputs:foo() -- break on purpose
         end
       end
 
