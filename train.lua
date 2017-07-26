@@ -805,7 +805,7 @@ function train(params, grad_params, epoch)
        return err, grad_params
     end
 
-    local _, loss = optim.adam(feval, params, adamconfig)
+    local _, loss = optim.adam(feval, params, opt.adamconfig)
 
     if opt.progress then
       xlua.progress(ir, nbatches)
