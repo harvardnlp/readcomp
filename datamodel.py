@@ -268,7 +268,7 @@ class Corpus(object):
             extr_word_freq[word] = 0
 
           # only count within context for non-punctuation and non-stopword tokens
-          if i <= sep and word not in self.dictionary.punc2idx and word not in self.dictionary.stop2idx:
+          if i < num_words - 1 and word not in self.dictionary.punc2idx and word not in self.dictionary.stop2idx:
             extr_word_freq[word] += 1
 
           data['data'].append(self.dictionary.word2idx[word])
@@ -285,7 +285,7 @@ class Corpus(object):
 
           freq = float(extr_word_freq[word]) / len(words)
           bigram_match = 0
-          if i <= sep:
+          if i < num_words - 1:
             if self.answer_identifier: # if location of answer is identified in the query (e.g. for CNN dataset) 
               if num_lines_in_file == 1 and i == 0:
                 print_msg('INFO: Using answer identifier token = {}'.format(self.answer_identifier), 1, self.args_verbose_level)
@@ -293,30 +293,30 @@ class Corpus(object):
 
               # make sure the previous and next ngrams of the token are actually in the context
               # and vice versa for the target answer 
-              if i > 1 and answer_index > sep + 1 and words[i - 1] == words[answer_index - 1]:
+              if i > 1 and answer_index > 1 and i != answer_index and words[i - 1] == words[answer_index - 1]:
+                bigram_match = 0.5
+              elif i < num_words - 1 and answer_index < num_words - 1 and i != answer_index and words[i + 1] == words[answer_index + 1]:
+                bigram_match = 0.5
+
+              if i > 2 and answer_index > 2 and i != answer_index and words[i - 2] == words[answer_index - 2] and words[i - 1] == words[answer_index - 1]:
                 bigram_match = 1
-              elif i <= sep - 1 and answer_index < num_words - 2 and words[i + 1] == words[answer_index + 1]:
+              elif i < num_words - 2 and answer_index < num_words - 2 and i != answer_index and words[i + 1] == words[answer_index + 1] and words[i + 2] == words[answer_index + 2]:
                 bigram_match = 1
 
-              if i > 2 and answer_index > sep + 2 and words[i - 2] == words[answer_index - 2] and words[i - 1] == words[answer_index - 1]:
-                bigram_match = 2
-              elif i <= sep - 2 and answer_index < num_words - 3 and words[i + 1] == words[answer_index + 1] and words[i + 2] == words[answer_index + 2]:
-                bigram_match = 2
-
-              if i > 3 and answer_index > sep + 3 and words[i - 3] == words[answer_index - 3] and words[i - 2] == words[answer_index - 2] and words[i - 1] == words[answer_index - 1]:
-                bigram_match = 3
-              elif i <= sep - 3 and answer_index < num_words - 4 and words[i + 1] == words[answer_index + 1] and words[i + 2] == words[answer_index + 2]  and words[i + 3] == words[answer_index + 3]:
-                bigram_match = 3
+              if i > 3 and answer_index > 3 and i != answer_index and words[i - 3] == words[answer_index - 3] and words[i - 2] == words[answer_index - 2] and words[i - 1] == words[answer_index - 1]:
+                bigram_match = 1.5
+              elif i < num_words - 3 and answer_index < num_words - 3 and i != answer_index and words[i + 1] == words[answer_index + 1] and words[i + 2] == words[answer_index + 2]  and words[i + 3] == words[answer_index + 3]:
+                bigram_match = 1.5
 
             else: # if not assume the location is at the end (e.g. LAMBADA)
               if i > 1 and words[i - 1] == words[num_words - 2]:
-                bigram_match = 1
+                bigram_match = 0.5
 
               if i > 2 and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2]:
-                bigram_match = 2
+                bigram_match = 1
 
               if i > 3 and words[i - 3] == words[num_words - 4] and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2]:
-                bigram_match = 3
+                bigram_match = 1.5
 
           extra_features.append(freq)
           extra_features.append(bigram_match)
