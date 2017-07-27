@@ -257,6 +257,10 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
     print(num_correct_random)
   end
 
+  if opt.cuda then
+    context_extr = context_extr:cuda()
+  end
+
   contexts = { {context, context_post}, context_extr}
   return contexts, answer, answer_ind
 end
