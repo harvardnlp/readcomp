@@ -67,17 +67,15 @@ def validate_tensor(corpus, t):
   for i in idx:
     offset = t['location'][i,0] - 1 # offset is 1-based index
     context_length = t['location'][i,1]
-    target_length = t['location'][i,2]
     context = t['data'][offset : offset + context_length]
-    target = t['data'][offset + context_length: offset + context_length + target_length]
-    text = t['data'][offset : offset + context_length + target_length]
+    text = t['data'][offset : offset + context_length + 1]
 
     doc_words = [corpus.dictionary.idx2word[token_id] for token_id in text]
 
     idx2post = {v: k for k, v in corpus.dictionary.post2idx.iteritems()}
 
     expected_post = [tag[1] for tag in nltk.pos_tag(doc_words)]
-    actual_post = [idx2post[token_id] for token_id in t['post'][offset : offset + context_length + target_length]]
+    actual_post = [idx2post[token_id] for token_id in t['post'][offset : offset + context_length + 1]]
 
     # pos tags are performed before <unk> tokenization, allow for 5% mismatch
     num_mis = 0
@@ -134,17 +132,16 @@ def debug_translate(corpus, file, mode):
       view_index = int(index) - 1 if index != '' else i if view_order == 'begin' or view_order == '' else num_examples - i - 1
       offset = to_translate['location'][view_index,0] - 1 # offset is 1-based index
       context_length = to_translate['location'][view_index,1]
-      target_length = to_translate['location'][view_index,2]
       context = to_translate['data'][offset : offset + context_length]
-      target = to_translate['data'][offset + context_length: offset + context_length + target_length]
+      answer = to_translate['data'][offset + context_length]
 
       print '1-BASED LINE INDEX = {}'.format(view_index + 1)
       print('CONTEXT')
-      print([idx2word[token] for token in context])
+      print([corpus.dictionary.idx2word[token] for token in context])
 
-      print('TARGET')
-      print([idx2word[token] for token in target])
-      
+      print('ANSWER')
+      print(corpus.dictionary.idx2word[answer])
+
 
 def main(arguments):
   global args

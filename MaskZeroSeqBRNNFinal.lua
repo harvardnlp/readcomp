@@ -6,21 +6,21 @@ local MaskZeroSeqBRNNFinal, parent = torch.class('nn.MaskZeroSeqBRNNFinal', 'nn.
 
 function MaskZeroSeqBRNNFinal:__init()
    parent.__init(self)
-   self.gradInput = {}
+   self.gradInput = torch.Tensor()
 end
 
 function MaskZeroSeqBRNNFinal:updateOutput(input)
    -- expects input of size batchsize x seqlen x (2 * hiddensize)
    -- where the first hiddensize chunk is from forward RNN pass, and the second from backward pass
-   local batchsize = input[1]:size(1)
-   local seqlen = input[1]:size(2)
-   local hiddensize2 = input[1]:size(3)
+   local batchsize = input:size(1)
+   local seqlen = input:size(2)
+   local hiddensize2 = input:size(3)
    local hiddensize = hiddensize2 / 2
 
    self.output:resize(batchsize, 2 * hiddensize):zero()
 
    for b = 1, batchsize do
-      firstNonzeroExample, lastNonzeroExample = getFirstLastNonZeroRow(input[b], seqlen, hiddensize)
+      firstNonzeroExample, lastNonzeroExample = self:getFirstLastNonZeroRow(input[b], seqlen, hiddensize)
       if firstNonzeroExample > 0 and lastNonzeroExample > 0 then
          self.output[{b, {1, hiddensize}}] = input[{b, lastNonzeroExample, {1, hiddensize}}]
          self.output[{b, {hiddensize + 1, hiddensize2}}] = input[{b, firstNonzeroExample, {hiddensize + 1, hiddensize2}}]
@@ -31,15 +31,15 @@ function MaskZeroSeqBRNNFinal:updateOutput(input)
 end
 
 function MaskZeroSeqBRNNFinal:updateGradInput(input, gradOutput)
-   local batchsize = input[1]:size(1)
-   local seqlen = input[1]:size(2)
-   local hiddensize2 = input[1]:size(3)
+   local batchsize = input:size(1)
+   local seqlen = input:size(2)
+   local hiddensize2 = input:size(3)
    local hiddensize = hiddensize2 / 2
 
    self.gradInput:resizeAs(input):zero()
 
    for b = 1, batchsize do
-      firstNonzeroExample, lastNonzeroExample = getFirstLastNonZeroRow(input[b], seqlen, hiddensize)
+      firstNonzeroExample, lastNonzeroExample = self:getFirstLastNonZeroRow(input[b], seqlen, hiddensize)
       if firstNonzeroExample > 0 and lastNonzeroExample > 0 then
          self.gradInput[{b, lastNonzeroExample, {1, hiddensize}}] = gradOutput[{b, {1, hiddensize}}]
          self.gradInput[{b, firstNonzeroExample, {hiddensize + 1, hiddensize2}}] = gradOutput[{b, {hiddensize + 1, hiddensize2}}]

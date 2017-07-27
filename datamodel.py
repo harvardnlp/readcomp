@@ -158,11 +158,6 @@ class Corpus(object):
     print_msg('Context Length: max = {}, min = {}, average = {}, std = {}'.format(
       np.max(train_context_length), np.min(train_context_length), np.mean(train_context_length), np.std(train_context_length)), 1, self.args_verbose_level)
 
-    train_target_length = self.train['location'][:,2]
-    train_target_length = train_target_length[train_target_length > 0]
-    print_msg('Target Length: max = {}, min = {}, average = {}, std = {}'.format(
-      np.max(train_target_length), np.min(train_target_length), np.mean(train_target_length), np.std(train_target_length)), 1, self.args_verbose_level)
-
     print_msg('POS Size: {}'.format(len(self.dictionary.post2idx)), 1, self.args_verbose_level)
 
 
@@ -178,15 +173,14 @@ class Corpus(object):
       'post': [], # pos tags 
       'extr': [], # extra features, such as frequency of token in the context, whether previous bi-gram of token match with that of the answer etc...
       'offsets': [], # offset locations for each line in the final 1-d data array 
-      'context_length': [], # count of words in the context (excluding target)
-      'target_length': [] # count of words in the target
+      'context_length': [], # count of words in the context
     }
 
     self.tokenize_file(path, data, training)
 
     sorted_data = { 'data': data['data'], 'post': data['post'], 'extr': data['extr'] }
 
-    loc = np.array([np.array(data['offsets']), np.array(data['context_length']), np.array(data['target_length'])]).T
+    loc = np.array([np.array(data['offsets']), np.array(data['context_length'])]).T
     loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
     sorted_data['location'] = loc
     return sorted_data
@@ -202,8 +196,6 @@ class Corpus(object):
         num_lines_in_file += 1
         words = line.split()
         
-        sep = -1 # last index of word in the context
-
         if self.context_target_separator:
           if num_lines_in_file == 1:
             print_msg('INFO: Using context-query-answer separator token = {}'.format(self.context_target_separator), 1, self.args_verbose_level)
@@ -220,17 +212,7 @@ class Corpus(object):
             continue
           words.pop(target_answer_separator_index)
 
-          num_words = len(words)
-        else:
-          num_words = len(words)
-          for i in range(num_words - 2, -1, -1):
-            if words[i] in end_words:
-              if words[i + 1] == "'" or words[i + 1] == "''":
-                sep = i + 1
-              else:
-                sep = i
-              break
-
+        num_words = len(words)
         pos_tags = [t[1] for t in nltk.pos_tag(words)]
 
         answer = words[num_words - 1]
@@ -242,21 +224,15 @@ class Corpus(object):
         if training:
           # make sure answer is part of context (for computing loss & gradients during training)
           found_answer = False
-          for i in range(0, sep + 1):
+          for i in range(0, num_words - 1):
             if answer == words[i]:
               found_answer = True
           if not found_answer:
             print_msg('INFO: SKIPPING... Target answer not found in context', 2, self.args_verbose_level)
             continue
 
-        target_length = num_words - sep - 1
-        if target_length < 3:
-          print_msg('INFO: SKIPPING... Target sentence should contain at least 3 tokens (in file {}). Target = {}, Line = {}'.format(file, words[sep+1:], num_lines_in_file), 2, self.args_verbose_level)
-          continue
-
         data['offsets'].append(len(data['data']) + 1)
-        data['context_length'].append(sep + 1)
-        data['target_length'].append(num_words - sep - 1)
+        data['context_length'].append(num_words - 1)
 
         words = [word if word in self.dictionary.word2idx else UNKNOWN for word in words]
 

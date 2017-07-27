@@ -166,17 +166,11 @@ function test_answer_in_context(tensor_data, tensor_location, sample)
   end
 end
 
-function allocate_data(max_context_length, max_target_length, batchsize)
+function allocate_data(max_context_length, batchsize)
   -- optimization: pre-allocate tensors and resize/reset when appropriate
   context      = context      and context     :resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
   context_post = context_post and context_post:resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
   context_extr = context_extr and context_extr:resize(max_context_length, opt.batchsize, extr_size):zero() or torch.LongTensor(max_context_length, opt.batchsize, extr_size):zero()
-
-  target_forward      = target_forward      and target_forward     :resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
-  target_forward_post = target_forward_post and target_forward_post:resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
-
-  target_backward      = target_backward      and target_backward     :resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
-  target_backward_post = target_backward_post and target_backward_post:resize(max_target_length, opt.batchsize):zero() or torch.LongTensor(max_target_length, opt.batchsize):zero()
 
   answer = answer and answer:resize(opt.batchsize):zero() or torch.LongTensor(opt.batchsize):zero()
 end
@@ -190,8 +184,7 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   local num_correct_likely = 0
 
   local max_context_length = math.min(opt.maxseqlen, tensor_location[batch_index][2])
-  local max_target_length = math.min(opt.maxseqlen, torch.max(tensor_location[{{batch_index, math.min(batch_index + opt.batchsize - 1, num_examples)}, 3}]))
-  allocate_data(max_context_length, max_target_length, opt.batchsize)
+  allocate_data(max_context_length, opt.batchsize)
 
   local answer_ind = {}
   for idx = 1, opt.batchsize do
@@ -200,33 +193,20 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
     if iexample <= num_examples then
       local cur_offset = tensor_location[iexample][1]
       local cur_context_length = tensor_location[iexample][2]
-      local cur_target_length = tensor_location[iexample][3]
       local cur_capped_context_length = math.min(opt.maxseqlen, cur_context_length)
-      local cur_capped_target_length = math.min(opt.maxseqlen, cur_target_length)
 
       local offset_end_context = cur_offset + cur_context_length
       local cur_context      = tensor_data[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
       local cur_context_post = tensor_post[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
       local cur_context_extr = tensor_extr[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}] -- cur_context_length x extr_size
 
-      local offset_end_target = cur_offset + cur_context_length + cur_target_length
-      local cur_target      = tensor_data[{{offset_end_target - cur_capped_target_length, offset_end_target - 2}}]
-      local cur_target_post = tensor_post[{{offset_end_target - cur_capped_target_length, offset_end_target - 2}}]
-
-      local cur_answer  = tensor_data[offset_end_target - 1]
+      local cur_answer  = tensor_data[offset_end_context]
 
       local context_size = cur_context:size(1)
-      local target_size  = cur_target:size(1)
 
       context[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context
       context_post[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_post
       context_extr[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_extr
-
-      target_forward [{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target
-      target_backward[{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target:index(1, torch.linspace(target_size, 1, target_size):long()) -- reverse order
-
-      target_forward_post [{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target_post
-      target_backward_post[{{max_target_length - target_size + 1, max_target_length}, idx}] = cur_target_post:index(1, torch.linspace(target_size, 1, target_size):long()) -- reverse order
 
       answer[idx] = cur_answer
 
@@ -278,11 +258,7 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   end
 
   contexts = { {context, context_post}, context_extr}
-  targets = {
-    {target_forward,  target_forward_post }, 
-    {target_backward, target_backward_post}
-  }
-  return contexts, targets, answer, answer_ind
+  return contexts, answer, answer_ind
 end
 
 function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tensor_extr, tensor_location)
@@ -318,13 +294,12 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   local correct = 0
   local num_examples = 0
   for i = 1, ntestbatches do
-    local tests_con, tests_tar, tests_ans, tests_ans_ind = loadData(tensor_data, tensor_post, tensor_extr, tensor_location, false, all_batches[i])
+    local tests_con, tests_ans, tests_ans_ind = loadData(tensor_data, tensor_post, tensor_extr, tensor_location, false, all_batches[i])
 
     local inputs = tests_con
-    local targets = tests_tar
     local answer = tests_ans
     local in_words = inputs[1][1]
-    local outputs = mask_attention(in_words, model:forward({inputs, targets}))
+    local outputs = mask_attention(in_words, model:forward(inputs))
 
     local predictions = answer.new():resizeAs(answer):zero()
     local truth = {}
@@ -360,10 +335,8 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
       local out_dump_file = string.format('%s.%s.%03d.dump', saved_model_file, dump_name, i)
       local out_file = hdf5.open(out_dump_file, 'w')
       local inp = in_words:long()
-      local tap = targets[1][1]:long()
       local out = outputs:double()
       out_file:write('inputs', inp)
-      out_file:write('targets', tap)
       out_file:write('outputs', out)
       out_file:write('predictions', predictions)
       out_file:write('answers', answer)
@@ -490,7 +463,7 @@ function build_model()
     U = nn.Sequential():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
-    q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
+    -- q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
 
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
     nng_U = U(nng_Yd):annotate({name = 'u', description = 'query embeddings'})
@@ -545,7 +518,7 @@ function build_model()
       nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
     
       if opt.model ~= 'ga' then
-        lm = nn.gModule({x_inp, q_inp}, {nng_YdU})
+        lm = nn.gModule({x_inp}, {nng_YdU})
       else
         nng_A = nn.SoftMax()(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
         AttentionColumn = nn.Unsqueeze(3) -- batch x seqlen x 1
@@ -661,7 +634,7 @@ function train(params, grad_params, epoch)
   -- for ir = 1,1 do
   for ir = 1,nbatches do
     local a = torch.Timer()
-    local inputs, targets, answers, answer_inds = loadData(data.train_data, data.train_post, data.train_extr, data.train_location, false, all_batches[randind[ir]])
+    local inputs, answers, answer_inds = loadData(data.train_data, data.train_post, data.train_extr, data.train_location, false, all_batches[randind[ir]])
     if opt.profile then
       print('Load training batch: ' .. a:time().real .. 's')
     end
@@ -673,7 +646,7 @@ function train(params, grad_params, epoch)
        grad_params:zero()
 
       -- forward
-      local outputs_pre = lm:forward({inputs, targets})
+      local outputs_pre = lm:forward(inputs)
       local outputs = mask_attention(inputs[1][1], outputs_pre)
 
       if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
@@ -742,8 +715,6 @@ function train(params, grad_params, epoch)
             print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]] .. ', ib = ' .. ib)
             print('inputs')
             print(inputs[1][1][{{}, ib}]:contiguous():view(1,-1))
-            print('targets')
-            print(targets[1][1][{{}, ib}]:contiguous():view(1,-1))
             print('outputs')
             print(outputs[ib]:view(1,-1))
               
@@ -771,9 +742,6 @@ function train(params, grad_params, epoch)
           print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]])
           print('inputs')
           print(inputs)
-          print('targets')
-          print(targets[1])
-          print(targets[2])
           print('outputs')
           print(outputs)
 
@@ -797,7 +765,7 @@ function train(params, grad_params, epoch)
       mask_attention_gradients(inputs[1][1], grad_outputs)
 
       lm:zeroGradParameters()
-      lm:backward({inputs, targets}, grad_outputs)
+      lm:backward(inputs, grad_outputs)
       
       -- update
       if opt.cutoff > 0 then
@@ -848,12 +816,11 @@ function validate(ntrial, epoch)
 
   -- for i = 1, 1 do
   for i = 1, nvalbatches do
-    local valid_con, valid_tar, valid_ans, valid_ans_ind = loadData(data.valid_data, data.valid_post, data.valid_extr, data.valid_location, false, all_batches[i])
+    local valid_con, valid_ans, valid_ans_ind = loadData(data.valid_data, data.valid_post, data.valid_extr, data.valid_location, false, all_batches[i])
 
     local inputs = valid_con
-    local targets = valid_tar
     local answer_inds = valid_ans_ind
-    local outputs = mask_attention(inputs[1][1], lm:forward({inputs, targets}))
+    local outputs = mask_attention(inputs[1][1], lm:forward(inputs))
     local err = 0
     for ib = 1, opt.batchsize do
       if valid_ans[ib] > 0 and puncs[valid_ans[ib]] == nil and stopwords[valid_ans[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers
