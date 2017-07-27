@@ -375,7 +375,7 @@ function build_doc_rnn(use_lookup, in_size, in_post_size)
       :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
 
     featurizer = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup):add(nn.Identity()))
+      :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
       :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
 
     doc_rnn:add(featurizer)
