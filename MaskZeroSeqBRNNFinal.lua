@@ -2,14 +2,14 @@ require 'nn'
 
 -- extract non-zero final states of BRNN when inputs contain zeros
 -- output = concat( final non-zero state of forward(x), final non-zero state of backward(x) )
-local MaskZeroBRNNFinal, parent = torch.class('nn.MaskZeroBRNNFinal', 'nn.Module')
+local MaskZeroSeqBRNNFinal, parent = torch.class('nn.MaskZeroSeqBRNNFinal', 'nn.Module')
 
-function MaskZeroBRNNFinal:__init()
+function MaskZeroSeqBRNNFinal:__init()
    parent.__init(self)
    self.gradInput = {}
 end
 
-function MaskZeroBRNNFinal:updateOutput(input)
+function MaskZeroSeqBRNNFinal:updateOutput(input)
    -- expects input of size batchsize x seqlen x (2 * hiddensize)
    -- where the first hiddensize chunk is from forward RNN pass, and the second from backward pass
    local batchsize = input[1]:size(1)
@@ -30,7 +30,7 @@ function MaskZeroBRNNFinal:updateOutput(input)
    return self.output
 end
 
-function MaskZeroBRNNFinal:updateGradInput(input, gradOutput)
+function MaskZeroSeqBRNNFinal:updateGradInput(input, gradOutput)
    local batchsize = input[1]:size(1)
    local seqlen = input[1]:size(2)
    local hiddensize2 = input[1]:size(3)
@@ -49,7 +49,7 @@ function MaskZeroBRNNFinal:updateGradInput(input, gradOutput)
    return self.gradInput
 end
 
-function MaskZeroBRNNFinal:getFirstLastNonZeroRow(input, seqlen, hiddensize)
+function MaskZeroSeqBRNNFinal:getFirstLastNonZeroRow(input, seqlen, hiddensize)
    local firstNonzeroExample = 0
    local lastNonzeroExample = 0
 

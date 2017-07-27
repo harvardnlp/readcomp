@@ -3,8 +3,8 @@ require 'paths'
 require 'rnn'
 require 'nngraph'
 require 'SeqBRNNP'
+require 'MaskZeroSeqBRNNFinal'
 require 'CAddTableBroadcast'
-require 'MaskZeroBRNNFinal'
 require 'optim'
 
 require 'crf/Util.lua'
@@ -487,7 +487,7 @@ function build_model()
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
     -- U = build_query_rnn(true, opt.inputsize + opt.postsize)
-    U = nn.Sequential():add(nn.MaskZeroBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
+    U = nn.Sequential():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
