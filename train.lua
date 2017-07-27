@@ -4,7 +4,9 @@ require 'rnn'
 require 'nngraph'
 require 'SeqBRNNP'
 require 'CAddTableBroadcast'
+require 'MaskZeroBRNNFinal'
 require 'optim'
+
 require 'crf/Util.lua'
 require 'crf/Markov.lua'
 require "crf/CRF.lua"
@@ -484,13 +486,14 @@ function build_model()
 
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
-    U = build_query_rnn(true, opt.inputsize + opt.postsize)
+    -- U = build_query_rnn(true, opt.inputsize + opt.postsize)
+    U = nn.Sequential():add(nn.MaskZeroBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
 
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
-    nng_U = U(q_inp):annotate({name = 'u', description = 'query embeddings'})
+    nng_U = U(nng_Yd):annotate({name = 'u', description = 'query embeddings'})
 
     if opt.model == 'crf' then
       -- Yd2 = Yd:clone()
