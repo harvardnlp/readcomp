@@ -52,12 +52,13 @@ fi
 
 gpuid=0
 class=("asr")
-seed=(7 1 2 3 4 5 6 8 9 10 11 12 13 14 15 16 17 18)
+seed=(101 7 1)
 batch=(64)
 embed=(128)
 adam=("{0.9, 0.999}")
 cutoff=(10)
 post=(80)
+dropout=(0.1 0.5)
 extra=""
 for cls in "${class[@]}"; do
   for rs in "${seed[@]}"; do
@@ -66,11 +67,13 @@ for cls in "${class[@]}"; do
         for ad in "${adam[@]}"; do
           for c in "${cutoff[@]}"; do
             for pst in "${post[@]}"; do
-              gpuid=$((gpuid % numgpu + 1))
-              if [ "$gpuid" = "$gpu" ]; then
-                printf "iteration = $t: th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig $ad --hiddensize {$d0} --postsize $pst --cutoff $c $extra\n" >> $OUTFILE
-                th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --batchsize $b --maxepoch $N --adamconfig "$ad" --hiddensize {$d0} --postsize $pst --cutoff $c $extra >> $OUTFILE
-              fi
+              for dr in "${dropout[@]}"; do
+                gpuid=$((gpuid % numgpu + 1))
+                if [ "$gpuid" = "$gpu" ]; then
+                  printf "iteration = $t: th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --batchsize $b --maxepoch $N --hiddensize {$d0} --postsize $pst --cutoff $c $extra --adamconfig $ad\n" >> $OUTFILE
+                  th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --batchsize $b --maxepoch $N --hiddensize {$d0} --postsize $pst --cutoff $c $extra --adamconfig "$ad" >> $OUTFILE
+                fi
+              done
             done
           done
         done
