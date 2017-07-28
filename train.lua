@@ -464,7 +464,7 @@ function build_model()
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
     -- U = build_query_rnn(true, opt.inputsize + opt.postsize)
-    U = nn.Sequential():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
+    U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     -- q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
@@ -715,13 +715,31 @@ function train(params, grad_params, epoch)
           if prob_answer == 0 then
             print('ERROR: zero prob assigned to the correct answer at the following indices: ')
 
+            for inode,node in ipairs(lm.forwardnodes) do
+              if node.data.annotations.name == 'Yd' then
+                print('------------------------------------')
+                print(node.data.annotations.name)
+                print(node.data.module.output[ib])
+              end
+            end
+
             print(answer_inds[ib])
             print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]] .. ', ib = ' .. ib)
             print('inputs')
             print(inputs[1][1][{{}, ib}]:contiguous():view(1,-1))
+            print('outputs_pre')
+            print(outputs_pre[ib]:view(1,-1))
             print('outputs')
             print(outputs[ib]:view(1,-1))
               
+            for inode,node in ipairs(lm.forwardnodes) do
+              if node.data.annotations.name == 'u' then
+                print('------------------------------------')
+                print(node.data.annotations.name)
+                print(node.data.module.output[ib]:view(1,-1))
+              end
+            end
+
             outputs:foo() -- intentionally break
           end
           for ians = 1, #answer_inds[ib] do
