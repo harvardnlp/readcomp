@@ -470,7 +470,7 @@ function build_model()
     -- q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
 
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
-    nng_U = U(nng_Yd):annotate({name = 'u', description = 'query embeddings'})
+    nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
 
     if opt.model == 'crf' then
       -- Yd2 = Yd:clone()
