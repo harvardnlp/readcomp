@@ -39,7 +39,9 @@ echo "Code file = " $codefile
 # copy code file and sweep file
 mkdir $OUTDIR
 cp sweep.bash $OUTDIR/
-cp $codefile $OUTDIR/
+cp -rf $codefile $OUTDIR/
+cp -rf *.lua $OUTDIR/
+cp -rf *.py $OUTDIR/
 
 for (( i=1; i<=$NUMGPU; i++ )); do
 	bash $OUTDIR/sweep.bash "$OUTFILE.$i" "$2" "$OUTDIR/$codefile" $i $NUMGPU &
