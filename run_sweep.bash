@@ -40,6 +40,7 @@ echo "Code file = " $codefile
 mkdir $OUTDIR
 cp sweep.bash $OUTDIR/
 cp -rf $codefile $OUTDIR/
+cp -rf *.bash $OUTDIR/
 cp -rf *.lua $OUTDIR/
 cp -rf *.py $OUTDIR/
 
