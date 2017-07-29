@@ -633,6 +633,7 @@ function train(params, grad_params, epoch)
   lm:training()
   local sumErr = 0
 
+  local min_prob_answer = 100
   local all_timer = torch.Timer()
   nbatches = opt.maxbatch == -1 and nbatches or math.min(opt.maxbatch, nbatches)
   -- for ir = 1,1 do
@@ -746,6 +747,7 @@ function train(params, grad_params, epoch)
             grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
           end
           err = err - torch.log(prob_answer)
+          min_prob_answer = math.min(min_prob_answer, prob_answer)
         end
       end
       if opt.profile then
@@ -758,7 +760,9 @@ function train(params, grad_params, epoch)
           ', max = ' .. grad_outputs:max() .. 
           ', mean = ' .. grad_outputs:mean() .. 
           ', std = ' .. grad_outputs:std() .. 
-          ', nnz = ' .. grad_outputs[grad_outputs:ne(0)]:size(1) .. ' / ' ..  grad_outputs:numel() .. ' ....................................')
+          ', nnz = ' .. grad_outputs[grad_outputs:ne(0)]:size(1) .. ' / ' ..  grad_outputs:numel() .. 
+          '. min_prob_answer: ' .. min_prob_answer ..
+          ' ....................................')
 
         if grad_outputs:mean() ~= grad_outputs:mean() then -- nan value
           print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]])
@@ -823,6 +827,10 @@ function train(params, grad_params, epoch)
   print(string.format("Time per epoch: %f s, Speed : %f words/second; %f ms/word", secs_per_epoch, speed, 1000/speed))
 
   local loss = sumErr/nbatches
+  if loss ~= loss then
+    print('NAN error detected, quitting')
+    os.exit()
+  end
   print("Training error : "..loss)
 
   xplog.trainloss[epoch] = loss
