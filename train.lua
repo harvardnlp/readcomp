@@ -517,7 +517,7 @@ function build_model()
 
     elseif opt.model == 'asr' or opt.model == 'ga' then
 
-      Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze()):add(nn.Normalize(math.huge))
+      Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze()):add(nn.Clamp(-10, 10))
 
       nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
     
