@@ -517,7 +517,7 @@ function build_model()
 
     elseif opt.model == 'asr' or opt.model == 'ga' then
 
-      Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze()):add(nn.Sigmoid())
+      Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze()):add(nn.Normalize(math.huge))
 
       nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
     
@@ -765,20 +765,28 @@ function train(params, grad_params, epoch)
           ' ....................................')
 
         if grad_outputs:mean() ~= grad_outputs:mean() then -- nan value
-          print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]])
-          print('inputs')
-          print(inputs)
-          print('outputs')
-          print(outputs)
 
           for inode,node in ipairs(lm.forwardnodes) do
-            if node.data.annotations.name == 'IgnoreZero' then
-              print('IgnoreZero')
-              print(node.data.module.output)
+            if node.data.annotations.name == 'Yd' then
+              print('------------------------------------')
+              print(node.data.annotations.name)
+              print(node.data.module.output[ib])
             end
-            if node.data.annotations.name == 'Attention' then
-              print('Attention')
-              print(node.data.module.output)
+          end
+
+          print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]])
+          print('inputs')
+          print(inputs[1][1]:t())
+          print('outputs_pre')
+          print(outputs_pre)
+          print('outputs')
+          print(outputs)
+            
+          for inode,node in ipairs(lm.forwardnodes) do
+            if node.data.annotations.name == 'u' then
+              print('------------------------------------')
+              print(node.data.annotations.name)
+              print(node.data.module.output:squeeze())
             end
           end
 
