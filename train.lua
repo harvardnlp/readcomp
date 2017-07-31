@@ -470,7 +470,7 @@ function build_model()
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
 
     Yt = Yd:clone():add(nn.Transpose({2,3}))
-    nng_Yt = Yt(nng_Yd):annotate({name = 'Yt', description = 'transposed embeddings'})
+    nng_Yt = Yt(x_inp):annotate({name = 'Yt', description = 'transposed embeddings'})
 
     nng_CA = nn.MM()({nng_Yd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
     nng_KMax = nn.KMaxFilter(opt.coa)(nng_CA):annotate({name = 'KMaxFilter', description = 'filter to only k-max values'})
