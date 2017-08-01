@@ -482,10 +482,10 @@ function build_model()
     nng_Yt = Yt(x_inp):annotate({name = 'Yt', description = 'transposed embeddings'})
 
     nng_CA = nn.MM()({nng_BiYd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
-    -- nng_KMax = nn.KMaxFilter(opt.coa)(nng_CA):annotate({name = 'KMaxFilter', description = 'filter to only k-max values'})
+    nng_KMax = nn.KMaxFilter(opt.coa)(nng_CA):annotate({name = 'KMaxFilter', description = 'filter to only k-max values'})
 
     ClampPreAttention = nn.Sequential():add(nn.Sum(3)):add(nn.Clamp(-10, 10))
-    nng_CAS = ClampPreAttention(nng_CA):annotate({name = 'CPA', description = 'clamp pre-attention'}) -- batch x seqlen
+    nng_CAS = ClampPreAttention(nng_KMax):annotate({name = 'CPA', description = 'clamp pre-attention'}) -- batch x seqlen
 
     lm = nn.gModule({x_inp}, {nng_CAS})
 
