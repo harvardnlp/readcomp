@@ -478,7 +478,7 @@ function build_model()
     
     nng_BiYd = BiYd(nng_Yd):annotate({name = 'BiYd', description = 'bilinear'})
 
-    nng_Yt = nn.Transpose({2,3})(Yd):annotate({name = 'Yt', description = 'transposed embeddings'})
+    nng_Yt = nn.Transpose({2,3})(nng_Yd):annotate({name = 'Yt', description = 'transposed embeddings'})
 
     nng_CA = nn.MM()({nng_BiYd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
     nng_KMax = nn.KMaxFilter(opt.coa)(nng_CA):annotate({name = 'KMaxFilter', description = 'filter to only k-max values'})
