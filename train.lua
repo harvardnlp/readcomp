@@ -469,21 +469,25 @@ function build_model()
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
 
+    BiYd = nn.Sequential()
+      :add(nn.SplitTable(1))
+      :add(nn.MapTable():add(nn.Sequential()
+        :add(nn.Linear(opt.hiddensize[#opt.hiddensize] * 2, opt.hiddensize[#opt.hiddensize] * 2))
+        :add(nn.Unsqueeze(1))))
+      :add(nn.JoinTable(1)) -- batch x seqlen x (2 * hiddensize)
+    
+    nng_BiYd = BiYd(nng_Yd):annotate({name = 'BiYd', description = 'bilinear'})
+
     Yt = Yd:clone():add(nn.Transpose({2,3}))
     nng_Yt = Yt(x_inp):annotate({name = 'Yt', description = 'transposed embeddings'})
 
-    nng_CA = nn.MM()({nng_Yd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
-    nng_KMax = nn.KMaxFilter(opt.coa)(nng_CA):annotate({name = 'KMaxFilter', description = 'filter to only k-max values'})
+    nng_CA = nn.MM()({nng_BiYd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
+    -- nng_KMax = nn.KMaxFilter(opt.coa)(nng_CA):annotate({name = 'KMaxFilter', description = 'filter to only k-max values'})
 
-    nng_YdCA = nn.MM()({nng_KMax, nng_Yd}):annotate({name = 'YdCA', description = 'coattention weighted embeddings'}) -- batch x seqlen x (2 * hiddensize)
+    ClampPreAttention = nn.Sequential():add(nn.Sum(3)):add(nn.Clamp(-10, 10))
+    nng_CAS = ClampPreAttention(nng_CA):annotate({name = 'CPA', description = 'clamp pre-attention'}) -- batch x seqlen
 
-    U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
-    nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
-
-    Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze()):add(nn.Clamp(-10, 10))
-    nng_YdU = Joint({nng_YdCA, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-
-    lm = nn.gModule({x_inp}, {nng_YdU})
+    lm = nn.gModule({x_inp}, {nng_CAS})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
