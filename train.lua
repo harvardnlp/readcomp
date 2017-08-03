@@ -365,7 +365,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   collect_track_garbage()
 end
 
-function build_lookup()
+function build_lookup(in_size, in_post_size)
   lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
   lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
 
@@ -388,7 +388,7 @@ function build_doc_rnn(use_lookup, in_size, in_post_size)
     -- input layer (i.e. word embedding space)
     -- input is seqlen x batchsize, output is seqlen x batchsize x insize
     if not featurizer then
-      build_lookup()
+      build_lookup(in_size, in_post_size)
       doc_rnn:add(featurizer)
     else
       doc_rnn:add(featurizer:clone('weight', 'gradWeight', 'bias', 'gradBias'))
