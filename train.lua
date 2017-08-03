@@ -466,10 +466,12 @@ function build_model()
 
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
+    Yt = Yd:clone():add(nn.Transpose({2,3}))
     U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+    nng_Yt = Yt(x_inp):annotate({name = 'Yt', description = 'transposed embeddings'})
     nng_U  = U(x_inp):annotate({name = 'U', description = 'e2e embeddings'})
 
     BiYd = nn.Sequential()
@@ -480,8 +482,6 @@ function build_model()
       :add(nn.JoinTable(1)) -- batch x seqlen x (2 * hiddensize)
     
     nng_BiYd = BiYd(nng_Yd):annotate({name = 'BiYd', description = 'bilinear'})
-
-    nng_Yt = nn.Transpose({2,3})(nng_Yd):annotate({name = 'Yt', description = 'transposed embeddings'})
 
     CoAttention = nn.Sequential():add(nn.MM()):add(nn.KMaxFilter(3)):add(nn.SoftMax())
     nng_CA = CoAttention({nng_BiYd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
