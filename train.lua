@@ -580,7 +580,6 @@ function train(params, grad_params, epoch)
   nbatches = opt.maxbatch == -1 and nbatches or math.min(opt.maxbatch, nbatches)
   -- for ir = 1,1 do
   for ir = 1,nbatches do
-    ir = nbatches - ir + 1
     local a = torch.Timer()
     local inputs, answers, answer_inds = loadData(data.train_data, data.train_post, data.train_extr, data.train_location, false, all_batches[randind[ir]])
     if opt.profile then
