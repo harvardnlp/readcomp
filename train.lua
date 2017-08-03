@@ -5,6 +5,7 @@ require 'nngraph'
 require 'SeqBRNNP'
 require 'MaskZeroSeqBRNNFinal'
 require 'KMaxFilter'
+require 'MakeDiagonalZero'
 require 'CAddTableBroadcast'
 require 'optim'
 
@@ -471,7 +472,7 @@ function build_model()
     nng_Yt = nn.Transpose({2,3})(nng_Yd):annotate({name = 'Yt', description = 'transposed embeddings'})
     nng_CA = nn.MM()({nng_Yd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
 
-    ClampPreAttention = nn.Sequential():add(nn.Sum(3)):add(nn.Clamp(-10, 10))
+    ClampPreAttention = nn.Sequential():add(nn.MakeDiagonalZero()):add(nn.KMaxFilter(1)):add(nn.Sum(3)):add(nn.Normalize(1))
     nng_CAS = ClampPreAttention(nng_CA):annotate({name = 'CPA', description = 'clamp pre-attention'}) -- batch x seqlen
 
     lm = nn.gModule({x_inp}, {nng_CAS})
@@ -555,6 +556,7 @@ function train(params, grad_params, epoch)
   nbatches = opt.maxbatch == -1 and nbatches or math.min(opt.maxbatch, nbatches)
   -- for ir = 1,1 do
   for ir = 1,nbatches do
+    ir = nbatches - ir + 1
     local a = torch.Timer()
     local inputs, answers, answer_inds = loadData(data.train_data, data.train_post, data.train_extr, data.train_location, false, all_batches[randind[ir]])
     if opt.profile then
@@ -571,7 +573,7 @@ function train(params, grad_params, epoch)
       local outputs_pre = lm:forward(inputs)
       local outputs = mask_attention(inputs[1][1], outputs_pre)
 
-      if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
+      if opt.verbose and ir <= 2 then
         -- print('inputs')
         -- print(inputs[{{},2}]:contiguous():view(1,-1))
         -- print('targets')
@@ -579,9 +581,9 @@ function train(params, grad_params, epoch)
         -- print(targets[2][{{},2}]:contiguous():view(1,-1))
         
         for inode,node in ipairs(lm.forwardnodes) do
-          -- if node.data.annotations.name == 'Yd' then
+          -- if node.data.annotations.name == 'CPA' then
           --   print(node.data.annotations.name)
-          --   print(node.data.module.output[{2}])
+          --   print(node.data.module.output)
           --   print(node.data.annotations.name)
           -- end
           -- if node.data.annotations.name == 'u' then
@@ -594,19 +596,19 @@ function train(params, grad_params, epoch)
           --   print(node.data.module.output:squeeze()[{2}]:view(1,-1))
           --   print(node.data.annotations.name)
           -- end
-          if node.data.annotations.name == 'CRF' then
-            local crftheta = node.data.module.output
-            print('crftheta')
-            print(crftheta)
-          end
-          if node.data.annotations.name == 'Theta' or node.data.annotations.name == 'CRF' then
-            local o = node.data.module.output
-            print(node.data.annotations.name..' min = '..o:min()..', max = '..o:max()..', avg = '..o:mean())
+          -- if node.data.annotations.name == 'CRF' then
+          --   local crftheta = node.data.module.output
+          --   print('crftheta')
+          --   print(crftheta)
+          -- end
+          -- if node.data.annotations.name == 'Theta' or node.data.annotations.name == 'CRF' then
+          --   local o = node.data.module.output
+          --   print(node.data.annotations.name..' min = '..o:min()..', max = '..o:max()..', avg = '..o:mean())
             -- print(node.data.annotations.name)
             -- print(node.data.module.output[{{},{},1}])
             -- print(node.data.module.output[{{},{},2}])
             -- print(node.data.annotations.name)
-          end
+          -- end
           -- if node.data.annotations.name == 'NOM' then
           --   print(node.data.annotations.name)
           --   print(node.data.module.output:squeeze())

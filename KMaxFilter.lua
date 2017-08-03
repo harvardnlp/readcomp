@@ -12,6 +12,8 @@ end
 
 function KMaxFilter:updateOutput(input)
    -- input size batchsize x seqlen x seqlen
+   assert(input:dim() == 3, 'invalid dimension')
+
    local batchsize = input:size(1)
    local seqlen = input:size(2)
    self.output:resizeAs(input):zero()
@@ -28,6 +30,9 @@ function KMaxFilter:updateOutput(input)
 end
 
 function KMaxFilter:updateGradInput(input, gradOutput)
+   -- input size batchsize x seqlen x seqlen
+   assert(input:dim() == 3, 'invalid dimension')
+   
    local batchsize = input:size(1)
    local seqlen = input:size(2)
 
