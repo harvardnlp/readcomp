@@ -472,7 +472,7 @@ function build_model()
     nng_Yt = nn.Transpose({2,3})(nng_Yd):annotate({name = 'Yt', description = 'transposed embeddings'})
     nng_CA = nn.MM()({nng_Yd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
 
-    ClampPreAttention = nn.Sequential():add(nn.MakeDiagonalZero()):add(nn.KMaxFilter(1)):add(nn.Sum(3)):add(nn.Normalize(1))
+    ClampPreAttention = nn.Sequential():add(nn.MakeDiagonalZero()):add(nn.KMaxFilter(3)):add(nn.Sum(3)):add(nn.Normalize(1))
     nng_CAS = ClampPreAttention(nng_CA):annotate({name = 'CPA', description = 'clamp pre-attention'}) -- batch x seqlen
 
     lm = nn.gModule({x_inp}, {nng_CAS})
