@@ -365,29 +365,37 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   collect_track_garbage()
 end
 
+function build_lookup()
+  lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
+  lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
+
+  lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
+  lookup_post.maxnormout = -1
+
+  lookup = nn.Sequential()
+    :add(nn.ParallelTable():add(lookup_text):add(lookup_post))
+    :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
+
+  featurizer = nn.Sequential()
+    :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
+    :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
+end
+
 function build_doc_rnn(use_lookup, in_size, in_post_size)
   local doc_rnn = nn.Sequential()
 
   if use_lookup then
     -- input layer (i.e. word embedding space)
     -- input is seqlen x batchsize, output is seqlen x batchsize x insize
-    lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
-    lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
+    if not featurizer then
+      build_lookup()
+      doc_rnn:add(featurizer)
+    else
+      doc_rnn:add(featurizer:clone('weight', 'gradWeight', 'bias', 'gradBias'))
+    end
 
-    lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
-    lookup_post.maxnormout = -1
-
-    lookup = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup_text):add(lookup_post))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
-
-    featurizer = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
-
-    doc_rnn:add(featurizer)
     if opt.dropout > 0 then
-        doc_rnn:add(nn.Dropout(opt.dropout))
+      doc_rnn:add(nn.Dropout(opt.dropout))
     end
   end
   in_size = in_size + in_post_size + extr_size
@@ -466,8 +474,8 @@ function build_model()
 
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
-    Yt = Yd:clone():add(nn.Transpose({2,3}))
-    U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
+    Yt = build_doc_rnn(true, opt.inputsize, opt.postsize):add(nn.Transpose({2,3}))
+    U  = build_doc_rnn(true, opt.inputsize, opt.postsize):add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
