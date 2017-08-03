@@ -469,8 +469,18 @@ function build_model()
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+
+    BiYd = nn.Sequential()
+      :add(nn.SplitTable(1))
+      :add(nn.MapTable():add(nn.Sequential()
+        :add(nn.Linear(opt.hiddensize[#opt.hiddensize] * 2, opt.hiddensize[#opt.hiddensize] * 2))
+        :add(nn.Unsqueeze(1))))
+      :add(nn.JoinTable(1)) -- batch x seqlen x (2 * hiddensize)
+    
+    nng_BiYd = BiYd(nng_Yd):annotate({name = 'BiYd', description = 'bilinear'})
+
     nng_Yt = nn.Transpose({2,3})(nng_Yd):annotate({name = 'Yt', description = 'transposed embeddings'})
-    nng_CA = nn.MM()({nng_Yd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
+    nng_CA = nn.MM()({nng_BiYd, nng_Yt}):annotate({name = 'Coattention', description = 'coattention'}) -- batch x seqlen x seqlen
 
     ClampPreAttention = nn.Sequential():add(nn.MakeDiagonalZero()):add(nn.KMaxFilter(3)):add(nn.Sum(3)):add(nn.Normalize(1))
     nng_CAS = ClampPreAttention(nng_CA):annotate({name = 'CPA', description = 'clamp pre-attention'}) -- batch x seqlen
