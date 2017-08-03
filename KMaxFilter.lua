@@ -42,7 +42,7 @@ function KMaxFilter:updateGradInput(input, gradOutput)
       for s = 1, seqlen do
          local kv, ki = input[b][s]:topk(self.k, true)
          for i = 1, ki:size(1) do
-            self.gradInput[{b,s,ki[i]}] = 1
+            self.gradInput[{b,s,ki[i]}] = gradOutput[{b,s,ki[i]}]
          end
       end
    end
