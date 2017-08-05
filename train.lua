@@ -463,101 +463,16 @@ function build_model()
 
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
-    -- U = build_query_rnn(true, opt.inputsize + opt.postsize)
     U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
-    -- q_inp = nn.Identity()():annotate({name = 'q', description = 'query'})
 
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
     nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
 
-    if opt.model == 'crf' then
-      -- Yd2 = Yd:clone()
-      -- U2 = U:clone()
-
-      -- Theta1 = nn.MM() -- batch x seqlen x 1
-      -- Theta2 = nn.MM() -- batch x seqlen x 1
-      -- Theta = nn.Sequential()
-      --   :add(nn.JoinTable(3)) -- batch x seqlen x 2
-      --   :add(nn.SplitTable(1))
-      --   :add(nn.MapTable()
-      --     :add(nn.Sequential()
-      --       :add(nn.SoftMax())
-      --       :add(nn.Unsqueeze(1))))
-      --   :add(nn.JoinTable(1)) -- batch x seqlen x 2
-
-      Theta = nn.Sequential()
-        :add(nn.MM()) -- batch x seqlen x 1
-        :add(nn.SplitTable(1))
-        :add(nn.MapTable()
-          :add(nn.Sequential()
-            :add(nn.Linear(1,2))
-            :add(nn.Tanh())
-            :add(nn.Unsqueeze(1))))
-        :add(nn.JoinTable(1)) -- batch x seqlen x 2
-
-      CRF = nn.Sequential():add(nn.NaN(nn.CRF(2))):add(nn.Exp()) -- batch x (seqlen + 1) x 2 x 2
-
-      Attention = nn.Sequential()
-        :add(nn.Narrow(2,2,-1))
-        :add(nn.Sum(4))
-        :add(nn.Select(3,1)) -- batch x seqlen x 1
-        :add(nn.Squeeze()) -- batch x seqlen
-        :add(nn.Normalize(1))
-
-      -- nng_Yd2 = Yd2(x_inp):annotate({name = 'Yd2', description = 'memory embeddings'})
-      -- nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
-
-      -- nng_Theta1 = Theta1({nng_Yd,  nng_U}):annotate({name = 'Theta1', description = 'unary potentials'})
-      -- nng_Theta2 = Theta2({nng_Yd2, nng_U2}):annotate({name = 'Theta2', description = 'unary potentials'})
-      nng_Theta  = Theta({nng_Yd, nng_U}):annotate({name = 'Theta', description = 'unary potentials'})
-      nng_CRF = CRF(nng_Theta):annotate({name = 'CRF', description = 'CRF'})
-      lm = nn.gModule({x_inp, q_inp}, {nng_CRF})
-
-    elseif opt.model == 'asr' or opt.model == 'ga' then
-
-      Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
-
-      nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-    
-      if opt.model ~= 'ga' then
-        lm = nn.gModule({x_inp}, {nng_YdU})
-      else
-        nng_A = nn.SoftMax()(nng_YdU):annotate({name = 'Attention', description = 'attention on query & context dot-product'})    
-        AttentionColumn = nn.Unsqueeze(3) -- batch x seqlen x 1
-        URow = nn.Transpose({2,3}) -- batch x 1 x (2 * hiddensize)
-        QHat = nn.Sequential():add(nn.ParallelTable():add(AttentionColumn):add(URow)):add(nn.MM()) -- batch x seqlen x (2 * hiddensize)
-
-        nng_QHat = QHat({nng_A, nng_U}):annotate({name = 'QHat', description = ''})
-        nng_X1 = nn.CMulTable()({nng_QHat, nng_Yd}):annotate({name = 'X1', description = 'intermediate document representation at 1st hop'})
-
-        Yd2 = build_doc_rnn(false, 2 * opt.hiddensize[1])
-        Yd2 = nn.Sequential():add(nn.Transpose({1,2})):add(Yd2)
-        Yd3 = Yd2:clone()
-
-        U2  = U:clone()
-        U3  = U:clone()
-
-        QHat2 = QHat:clone()
-
-        Joint2 = Joint:clone()
-        Joint3 = Joint:clone()
-
-        nng_Yd2 = Yd2(nng_X1):annotate({name = 'Yd2', description = 'memory embeddings'})
-        nng_U2 = U2(q_inp):annotate({name = 'u2', description = 'query embeddings'})
-        nng_YdU2 = Joint2({nng_Yd2, nng_U2}):annotate({name = 'Joint2', description = 'Yd * U'})
-        nng_A2 = nn.SoftMax()(nng_YdU2):annotate({name = 'Attention2', description = 'attention on query & context dot-product'})    
-        nng_QHat2 = QHat2({nng_A2, nng_U2}):annotate({name = 'QHat2', description = ''})
-        nng_X2 = nn.CMulTable()({nng_QHat2, nng_Yd2}):annotate({name = 'X2', description = 'intermediate document representation at 2nd hop'})
-
-        nng_Yd3 = Yd3(nng_X2):annotate({name = 'Yd3', description = 'memory embeddings'})
-        nng_U3 = U3(q_inp):annotate({name = 'u3', description = 'query embeddings'})
-        nng_YdU3 = Joint3({nng_Yd3, nng_U3}):annotate({name = 'Joint3', description = 'Yd * U'})
-        
-        lm = nn.gModule({x_inp, q_inp}, {nng_YdU3})
-      end
-    end
+    Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
+    nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
+    lm = nn.gModule({x_inp}, {nng_YdU})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
