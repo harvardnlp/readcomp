@@ -5,7 +5,6 @@ require 'MaskZeroSeqBRNNFinal'
 require 'MaxNodeMarginal'
 require 'SinusoidPositionEncoding'
 require 'MultiHeadAttention'
-require 'MapModule3D'
 require 'PositionWiseFFNN'
 
 local mytester = torch.Tester()
@@ -139,32 +138,6 @@ function nntest.SinusoidPositionEncoding()
   end
 end
 
-function nntest.MapModule3D()
-  local ntests = 5
-  local max_dim1 = 8
-  local max_dim2 = 16
-  local max_dim3 = 16
-  local max_dim4 = 16
-
-  for t = 1, ntests do
-    local dim1 = math.random(1, max_dim1)
-    local dim2 = math.random(1, max_dim2)
-    local dim3 = math.random(1, max_dim3)
-    local dim4 = math.random(1, max_dim4)
-
-    local module = nn.MapModule3D(nn.Linear(dim3, dim4))
-
-    local input = torch.rand(dim1,dim2,dim3):zero()
-    local err = jac.testJacobian(module,input)
-    mytester:assertlt(err,precision, 'error on state ')
-
-    -- IO
-    local ferr,berr = jac.testIO(module,input)
-    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
-    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
-  end
-end
-
 function nntest.MultiHeadAttention()
   local ntests = 5
   local max_dim1 = 8
@@ -237,6 +210,5 @@ end
 
 nn.test{
   'KMaxFilter', 'MakeDiagonalZero', 'MaskZeroSeqBRNNFinal', 'MaxNodeMarginal', 
-  'SinusoidPositionEncoding', 'MapModule3D',
-  'MultiHeadAttention'
+  'SinusoidPositionEncoding', 'MultiHeadAttention'
 }

@@ -4,8 +4,8 @@ local PositionWiseFFNN, parent = torch.class('nn.PositionWiseFFNN', 'nn.Sequenti
 function PositionWiseFFNN:__init(hidsize, dff, dropout)
   -- expects input of size batchsize x seqlen x hidsize
   parent.__init(self)
-  
-  self:add(nn.MapModule3D(nn.Sequential()
+
+  self:add(nn.Bottle(nn.Sequential()
       :add(nn.Linear(hidsize, dff))
       :add(nn.ReLU())
       :add(nn.Linear(dff, hidsize))))

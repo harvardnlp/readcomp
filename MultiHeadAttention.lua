@@ -13,17 +13,17 @@ function MultiHeadAttention:__init(h, dmodel, dropout)
           :add(nn.ConcatTable()
             :add(nn.Sequential()
               :add(nn.ConcatTable()
-                :add(nn.MapModule3D(nn.Linear(dmodel, dk))) -- Q : batchsize x seqlen x dk
-                :add(nn.MapModule3D(nn.Linear(dmodel, dk)):add(nn.Transpose({2,3})))) -- K^T : batchsize x dk x seqlen
+                :add(nn.Bottle(nn.Linear(dmodel, dk))) -- Q : batchsize x seqlen x dk
+                :add(nn.Sequential():add(nn.Bottle(nn.Linear(dmodel, dk))):add(nn.Transpose({2,3})))) -- K^T : batchsize x dk x seqlen
               :add(nn.MM()) -- Q * K^T : batchsize x seqlen x seqlen
               :add(nn.MulConstant(1 / math.sqrt(dk))) -- scaled dot-product attention
-              :add(nn.MapModule3D(self:SoftMaxDropout(dropout))))
-            :add(nn.MapModule3D(nn.Linear(dmodel, dv)))) -- V : batchsize x seqlen x dv
+              :add(nn.Bottle(self:SoftMaxDropout(dropout))))
+            :add(nn.Bottle(nn.Linear(dmodel, dv)))) -- V : batchsize x seqlen x dv
           :add(nn.MM())) -- (Q K^T) * V: batchsize x seqlen x dv
   end
   self:add(multihead) -- batchsize x seqlen x dmodel
       :add(nn.JoinTable(3)) -- batchsize x seqlen x (h * dv)
-      :add(nn.MapModule3D(nn.Linear(h * dv, dmodel))) -- batchsize x seqlen x dmodel
+      :add(nn.Bottle(nn.Linear(h * dv, dmodel))) -- batchsize x seqlen x dmodel
 
   if dropout > 0 then
     self:add(nn.Dropout(dropout))

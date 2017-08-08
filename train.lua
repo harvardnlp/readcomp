@@ -5,7 +5,6 @@ require 'nngraph'
 require 'SeqBRNNP'
 require 'MaskZeroSeqBRNNFinal'
 require 'CAddTableBroadcast'
-require 'MapModule3D'
 require 'SinusoidPositionEncoding'
 require 'PositionWiseFFNN'
 require 'MultiHeadAttention'
@@ -404,15 +403,15 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
         :add(nn.MultiHeadAttention(opt.atthead, in_size, opt.dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
       :add(nn.CAddTable())
-      :add(nn.MapModule3D(nn.LayerNormalization(in_size))) -- batchsize x seqlen x hidsize
+      :add(nn.Bottle(nn.LayerNormalization(in_size))) -- batchsize x seqlen x hidsize
       :add(nn.ConcatTable()
         :add(nn.PositionWiseFFNN(in_size, opt.dff, opt.dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
       :add(nn.CAddTable())
-      :add(nn.MapModule3D(nn.LayerNormalization(in_size))) -- batchsize x seqlen x hidsize
+      :add(nn.Bottle(nn.LayerNormalization(in_size))) -- batchsize x seqlen x hidsize
   end
 
-  doc_encoder:add(nn.MapModule3D(nn.Linear(in_size, 1))):add(nn.Squeeze())
+  doc_encoder:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
 
   return doc_encoder
 end
