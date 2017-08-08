@@ -9,7 +9,6 @@ require 'MapModule3D'
 require 'SinusoidPositionEncoding'
 require 'PositionWiseFFNN'
 require 'MultiHeadAttention'
-require 'LayerNormalization'
 require 'optim'
 
 require 'crf/Util.lua'
@@ -389,7 +388,7 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
     featurizer = nn.Sequential()
       :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
       :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
-      :add(nn.SinusoidPositionEncoding(opt.maxseqlen, insize + in_post_size + extr_size))
+      :add(nn.SinusoidPositionEncoding(opt.maxseqlen, in_size + in_post_size + extr_size))
 
     doc_encoder:add(featurizer)
     if opt.dropout > 0 then
