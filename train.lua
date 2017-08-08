@@ -397,6 +397,7 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
   end
   in_size = in_size + in_post_size + extr_size
 
+  doc_encoder:add(nn.Transpose({1,2}))
   for i = 1, opt.attstack do
     doc_encoder
       :add(nn.ConcatTable()

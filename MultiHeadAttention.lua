@@ -2,7 +2,7 @@
 
 local MultiHeadAttention, parent = torch.class('nn.MultiHeadAttention', 'nn.Sequential')
 function MultiHeadAttention:__init(h, dmodel, dropout)
-  -- expects input of size seqlen x batchsize x dmodel
+  -- expects input of size batchsize x seqlen x dmodel
   parent.__init(self)
   local dk = math.floor(dmodel / h)
   local dv = dk
@@ -21,11 +21,10 @@ function MultiHeadAttention:__init(h, dmodel, dropout)
             :add(nn.MapModule3D(nn.Linear(dmodel, dv)))) -- V : batchsize x seqlen x dv
           :add(nn.MM())) -- (Q K^T) * V: batchsize x seqlen x dv
   end
-  self:add(nn.Transpose({1,2})) -- batchsize x seqlen x dmodel
-      :add(multihead)
+  self:add(multihead) -- batchsize x seqlen x dmodel
       :add(nn.JoinTable(3)) -- batchsize x seqlen x (h * dv)
       :add(nn.MapModule3D(nn.Linear(h * dv, dmodel))) -- batchsize x seqlen x dmodel
-      
+
   if dropout > 0 then
     self:add(nn.Dropout(dropout))
   end
