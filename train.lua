@@ -5,6 +5,11 @@ require 'nngraph'
 require 'SeqBRNNP'
 require 'MaskZeroSeqBRNNFinal'
 require 'CAddTableBroadcast'
+require 'MapModule3D'
+require 'SinusoidPositionEncoding'
+require 'PositionWiseFFNN'
+require 'MultiHeadAttention'
+require 'LayerNormalization'
 require 'optim'
 
 require 'crf/Util.lua'
@@ -32,6 +37,9 @@ cmd:option('--device', 1, 'sets the device (GPU) to use')
 cmd:option('--profile', false, 'profile updateOutput,updateGradInput and accGradParameters in Sequential')
 cmd:option('--maxbatch', -1, 'maximum number of training batches per epoch')
 cmd:option('--maxepoch', 10, 'maximum number of epochs to run')
+cmd:option('--attstack', 6, 'number of multi-self-attention layers')
+cmd:option('--atthead', 8, 'number of attention heads in multi-self-attention')
+cmd:option('--dff', 2048, 'number of hidden units for the inner layer of position-wise FFNN')
 cmd:option('--gcepoch', 1000, 'specify #-epoch interval to perform garbage collection')
 cmd:option('--maxseqlen', 1024, 'maximum sequence length for context and target')
 cmd:option('--earlystop', 5, 'maximum number of epochs to wait to find a better local minima for early-stopping')
@@ -362,8 +370,8 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   collect_track_garbage()
 end
 
-function build_doc_rnn(use_lookup, in_size, in_post_size)
-  local doc_rnn = nn.Sequential()
+function build_doc_encoder(use_lookup, in_size, in_post_size)
+  local doc_encoder = nn.Sequential()
 
   if use_lookup then
     -- input layer (i.e. word embedding space)
@@ -381,26 +389,32 @@ function build_doc_rnn(use_lookup, in_size, in_post_size)
     featurizer = nn.Sequential()
       :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
       :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
+      :add(nn.SinusoidPositionEncoding(opt.maxseqlen, insize + in_post_size + extr_size))
 
-    doc_rnn:add(featurizer)
+    doc_encoder:add(featurizer)
     if opt.dropout > 0 then
-        doc_rnn:add(nn.Dropout(opt.dropout))
+        doc_encoder:add(nn.Dropout(opt.dropout))
     end
   end
   in_size = in_size + in_post_size + extr_size
-  -- rnn layers
-  for i,hiddensize in ipairs(opt.hiddensize) do
-    -- expects input of size seqlen x batchsize x hiddensize
-    local brnn = nn.SeqBRNNP(in_size, hiddensize, opt.rnntype, opt.projsize, false, nn.JoinTable(3))
-    brnn:MaskZero(true)
-    doc_rnn:add(brnn)
-    if opt.dropout > 0 then
-      doc_rnn:add(nn.Dropout(opt.dropout))
-    end
-    in_size = 2 * hiddensize
+
+  for i = 1, opt.attstack do
+    doc_encoder
+      :add(nn.ConcatTable()
+        :add(nn.MultiHeadAttention(opt.atthead, in_size, opt.dropout))
+        :add(nn.Identity())) -- batchsize x seqlen x hidsize
+      :add(nn.CAddTable())
+      :add(nn.MapModule3D(nn.LayerNormalization(in_size))) -- batchsize x seqlen x hidsize
+      :add(nn.ConcatTable()
+        :add(nn.PositionWiseFFNN(in_size, opt.dff, opt.dropout))
+        :add(nn.Identity())) -- batchsize x seqlen x hidsize
+      :add(nn.CAddTable())
+      :add(nn.MapModule3D(nn.LayerNormalization(in_size))) -- batchsize x seqlen x hidsize
   end
-  doc_rnn:add(nn.Transpose({1,2})) -- batchsize x seqlen x (2 * hiddensize)
-  return doc_rnn
+
+  doc_encoder:add(nn.MapModule3D(nn.Linear(in_size, 1))):add(nn.Squeeze())
+
+  return doc_encoder
 end
 
 function build_query_rnn(use_lookup, in_size)
@@ -462,17 +476,12 @@ end
 function build_model()
 
   if not lm then
-    Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
-    U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
-
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
 
+    Yd = build_doc_encoder(true, opt.inputsize, opt.postsize)
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
-    nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
 
-    Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
-    nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-    lm = nn.gModule({x_inp}, {nng_YdU})
+    lm = nn.gModule({x_inp}, {nng_Yd})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch

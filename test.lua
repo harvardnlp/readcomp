@@ -3,6 +3,11 @@ require 'KMaxFilter'
 require 'MakeDiagonalZero'
 require 'MaskZeroSeqBRNNFinal'
 require 'MaxNodeMarginal'
+require 'SinusoidPositionEncoding'
+require 'MultiHeadAttention'
+require 'LayerNormalization'
+require 'MapModule3D'
+require 'PositionWiseFFNN'
 
 local mytester = torch.Tester()
 local jac
@@ -110,6 +115,130 @@ function nntest.MaxNodeMarginal()
   end
 end
 
+function nntest.SinusoidPositionEncoding()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+  local max_dim3 = 16
+
+  for t = 1, ntests do
+    local dim1 = math.random(1, max_dim1)
+    local dim2 = math.random(1, max_dim2)
+    local dim3 = math.random(1, max_dim3)
+
+    local module = nn.SinusoidPositionEncoding(1024, dim3)
+
+      -- 3D
+    local input = torch.rand(dim1,dim2,dim3):zero()
+    local err = jac.testJacobian(module,input)
+    mytester:assertlt(err,precision, 'error on state ')
+
+    -- IO
+    local ferr,berr = jac.testIO(module,input)
+    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
+    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
+  end
+end
+
+function nntest.LayerNormalization()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+
+  for t = 1, ntests do
+    local dim1 = math.random(1, max_dim1)
+    local dim2 = math.random(1, max_dim2)
+
+    local module = nn.LayerNormalization(dim2)
+
+    local input = torch.rand(dim1,dim2):zero()
+    local err = jac.testJacobian(module,input)
+    mytester:assertlt(err,precision, 'error on state ')
+
+    -- IO
+    local ferr,berr = jac.testIO(module,input)
+    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
+    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
+  end
+end
+
+function nntest.MapModule3D()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+  local max_dim3 = 16
+  local max_dim4 = 16
+
+  for t = 1, ntests do
+    local dim1 = math.random(1, max_dim1)
+    local dim2 = math.random(1, max_dim2)
+    local dim3 = math.random(1, max_dim3)
+    local dim4 = math.random(1, max_dim4)
+
+    local module = nn.MapModule3D(nn.Linear(dim3, dim4))
+
+    local input = torch.rand(dim1,dim2,dim3):zero()
+    local err = jac.testJacobian(module,input)
+    mytester:assertlt(err,precision, 'error on state ')
+
+    -- IO
+    local ferr,berr = jac.testIO(module,input)
+    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
+    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
+  end
+end
+
+function nntest.MultiHeadAttention()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+  local max_dim3 = 16
+
+  for t = 1, ntests do
+    local dim1 = math.random(1, max_dim1)
+    local dim2 = math.random(1, max_dim2)
+    local dim3 = math.random(1, max_dim3)
+    local h    = math.random(1, dim3)
+
+    local module = nn.MultiHeadAttention(h, dim3, 0)
+    
+    local input = torch.rand(dim1,dim2,dim3):zero()
+    local err = jac.testJacobian(module,input)
+    mytester:assertlt(err,precision, 'error on state ')
+
+    -- IO
+    local ferr,berr = jac.testIO(module,input)
+    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
+    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
+  end
+end
+
+function nntest.PositionWiseFFNN()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+  local max_dim3 = 16
+  local max_dff  = 16
+
+  for t = 1, ntests do
+    local dim1 = math.random(1, max_dim1)
+    local dim2 = math.random(1, max_dim2)
+    local dim3 = math.random(1, max_dim3)
+    local dff  = math.random(1, max_dff)
+
+    local module = nn.PositionWiseFFNN(dim3, dff, 0)
+
+    local input = torch.rand(dim1,dim2,dim3):zero()
+    local err = jac.testJacobian(module,input)
+    mytester:assertlt(err,precision, 'error on state ')
+
+    -- IO
+    local ferr,berr = jac.testIO(module,input)
+    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
+    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
+  end
+end
+
 mytester:add(nntest)
 
 jac = nn.Jacobian
@@ -129,4 +258,8 @@ function nn.test(tests, seed)
    return mytester
 end
 
-nn.test{'KMaxFilter', 'MakeDiagonalZero', 'MaskZeroSeqBRNNFinal', 'MaxNodeMarginal'}
+nn.test{
+  'KMaxFilter', 'MakeDiagonalZero', 'MaskZeroSeqBRNNFinal', 'MaxNodeMarginal', 
+  'SinusoidPositionEncoding', 'LayerNormalization', 'MapModule3D',
+  'MultiHeadAttention'
+}
