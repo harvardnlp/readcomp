@@ -264,10 +264,12 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   end
 
   if opt.cuda then
+    context = context:cuda()
+    context_post = context_post:cuda()
     context_extr = context_extr:cuda()
   end
 
-  contexts = { {context, context_post}, context_extr}
+  contexts = { {context:t(), context_post:t()}, context_extr:transpose(1,2) }
   return contexts, answer, answer_ind
 end
 
@@ -320,7 +322,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
         local max_prob = 0
         local max_word = 0
         for iw = 1, outputs:size(2) do
-          local word = in_words[iw][b]
+          local word = in_words[b][iw]
           if word ~= 0 then
             if word_to_prob[word] == nil then
               word_to_prob[word] = 0
@@ -354,7 +356,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     end
 
     if opt.progress then
-      xlua.progress(i, #tests_con)
+      xlua.progress(i, ntestbatches)
     end
 
     if i % opt.gcepoch == 0 then
@@ -396,7 +398,6 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
   end
   in_size = in_size + in_post_size + extr_size
 
-  doc_encoder:add(nn.Transpose({1,2}))
   for i = 1, opt.attstack do
     doc_encoder
       :add(nn.ConcatTable()
@@ -517,15 +518,18 @@ function build_model()
   if opt.cuda then
     lm:cuda()
     attention_layer:cuda()
+
+    lm = nn.DataParallelTable(2):add(lm, torch.range(1, cutorch.getDeviceCount()):totable()):cuda()
   end
+
 end
 
 function mask_attention(input_context, output_pre_attention)
   -- attention while masking out stopwords, punctuations
-  for i = 1, input_context:size(1) do -- seqlen
-    for j = 1, input_context:size(2) do -- batchsize
+  for i = 1, input_context:size(1) do -- batchsize
+    for j = 1, input_context:size(2) do -- seqlen
       if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
-        output_pre_attention[j][i] = -math.huge
+        output_pre_attention[i][j] = -math.huge
       end
     end
   end
@@ -533,12 +537,12 @@ function mask_attention(input_context, output_pre_attention)
 end
 
 function mask_attention_gradients(input_context, output_grad)
-  -- input_context is seqlen x batchsize
+  -- input_context is batchsize x seqlen
   -- output_grad is batchsize x seqlen
   for i = 1, input_context:size(1) do
     for j = 1, input_context:size(2) do
       if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
-        output_grad[j][i] = 0
+        output_grad[i][j] = 0
       end
     end
   end
@@ -550,6 +554,9 @@ function train(params, grad_params, epoch)
   local nbatches = all_batches:size(1)
   local randind = epoch == 1 and torch.range(1,nbatches) or torch.randperm(nbatches)
   local grad_outputs = torch.zeros(opt.batchsize, 100) -- preallocate
+  if opt.cuda then
+    grad_outputs = grad_outputs:cuda()
+  end
 
   print('Total # of batches: ' .. nbatches)
 
@@ -622,10 +629,6 @@ function train(params, grad_params, epoch)
 
       grad_outputs:resize(opt.batchsize, outputs:size(2)):zero()
 
-      if opt.cuda then
-        grad_outputs = grad_outputs:cuda()
-      end
-
       -- compute attention sum, loss & gradients
       local a = torch.Timer()
       local err = 0
@@ -649,7 +652,7 @@ function train(params, grad_params, epoch)
             print(answer_inds[ib])
             print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]] .. ', ib = ' .. ib)
             print('inputs')
-            print(inputs[1][1][{{}, ib}]:contiguous():view(1,-1))
+            print(inputs[1][1][{ib, {}}]:contiguous():view(1,-1))
             print('outputs_pre')
             print(outputs_pre[ib]:view(1,-1))
             print('outputs')
