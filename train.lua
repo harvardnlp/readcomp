@@ -804,10 +804,12 @@ function validate(ntrial, epoch)
     xplog.minvalloss = validloss
     xplog.epoch = epoch 
     local filename = paths.concat(opt.savepath, opt.id..'.t7')
+    
+    test_model()
+
     if not opt.dontsave then
       print("Found new minima. Saving to "..filename)
       torch.save(filename, xplog)
-      test_model()
     end
     ntrial = 0
   elseif ntrial >= opt.earlystop then

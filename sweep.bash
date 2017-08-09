@@ -53,13 +53,16 @@ fi
 gpuid=0
 class=("asr")
 seed=(101 7 1)
-batch=(64)
+batch=(32 16)
 embed=(128)
 adam=("{0.9, 0.999}")
 cutoff=(10)
-post=(80)
-dropout=(0.1 0.5)
-extra=""
+post=(80 50)
+dropout=(0.1 0 0.5)
+attstack=(3 2 1)
+atthead=(4 3 2 1)
+dff=(512 128 32 8)
+extra="--dontsave --datafile lambada-small.hdf5"
 for cls in "${class[@]}"; do
   for rs in "${seed[@]}"; do
     for b in "${batch[@]}"; do
@@ -68,11 +71,17 @@ for cls in "${class[@]}"; do
           for c in "${cutoff[@]}"; do
             for pst in "${post[@]}"; do
               for dr in "${dropout[@]}"; do
-                gpuid=$((gpuid % numgpu + 1))
-                if [ "$gpuid" = "$gpu" ]; then
-                  printf "iteration = $t: th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --batchsize $b --maxepoch $N --hiddensize {$d0} --postsize $pst --cutoff $c $extra --adamconfig $ad\n" >> $OUTFILE
-                  th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --batchsize $b --maxepoch $N --hiddensize {$d0} --postsize $pst --cutoff $c $extra --adamconfig "$ad" >> $OUTFILE
-                fi
+                for as in "${attstack[@]}"; do
+                  for ah in "${atthead[@]}"; do
+                    for df in "${dff[@]}"; do
+                      gpuid=$((gpuid % numgpu + 1))
+                      if [ "$gpuid" = "$gpu" ]; then
+                        printf "iteration = $t: th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --attstack $as --atthead $ah --dff $df --batchsize $b --maxepoch $N --hiddensize {$d0} --postsize $pst --cutoff $c $extra --adamconfig $ad\n" >> $OUTFILE
+                        th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --attstack $as --atthead $ah --dff $df --batchsize $b --maxepoch $N --hiddensize {$d0} --postsize $pst --cutoff $c $extra --adamconfig "$ad" >> $OUTFILE
+                      fi
+                    done
+                  done
+                done
               done
             done
           done
