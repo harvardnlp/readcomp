@@ -399,8 +399,9 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
   end
   in_size = in_size + in_post_size + extr_size
 
+  local selfattention = nn.Sequential()
   for i = 1, opt.attstack do
-    doc_encoder
+    selfattention
       :add(nn.ConcatTable()
         :add(nn.MultiHeadAttention(opt.atthead, in_size, opt.dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
@@ -417,7 +418,8 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
       :add(nn.Transpose({1,2}))
   end
 
-  doc_encoder:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
+  selfattention:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
+  doc_encoder:add(nn.MaskZero(selfattention))
 
   return doc_encoder
 end
