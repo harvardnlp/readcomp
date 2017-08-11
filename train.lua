@@ -419,7 +419,7 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
   end
 
   selfattention:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
-  doc_encoder:add(nn.MaskZero(selfattention))
+  doc_encoder:add(nn.MaskZero(selfattention, 2))
 
   return doc_encoder
 end
