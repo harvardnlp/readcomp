@@ -22,14 +22,16 @@ function LayerNorm:__init(batchsize, hiddensize, eps, affine)
                     :add(nn.Replicate(hiddensize,2,1))))
     :add(nn.CDivTable())
 
-  self:add(nn.Bottle(ln))
+  self:add(nn.Bottle(nn.MaskZero(ln,1)))
 
   if affine then
     self:add(nn.SplitTable(1))
         :add(nn.MapTable()
                 :add(nn.Sequential()
-                        :add(nn.CMul(batchsize, hiddensize))
-                        :add(nn.CAdd(batchsize, hiddensize))
+                        :add(nn.MaskZero(
+                          nn.Sequential()
+                            :add(nn.CMul(batchsize, hiddensize))
+                            :add(nn.CAdd(batchsize, hiddensize)), 1))
                         :add(nn.Unsqueeze(1))))
         :add(nn.JoinTable(1))
   end

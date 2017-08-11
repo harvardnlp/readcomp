@@ -1,4 +1,5 @@
 require 'nn'
+require 'rnn'
 require 'KMaxFilter'
 require 'MakeDiagonalZero'
 require 'MaskZeroSeqBRNNFinal'
@@ -120,6 +121,16 @@ function nntest.SinusoidPositionEncoding()
   local max_dim2 = 16
   local max_dim3 = 16
 
+  local x = torch.rand(8, 32, 16)
+  x[{{}, {1,2}}]:zero()
+  x[{{}, {10,11}}]:zero()
+
+  local y = nn.SinusoidPositionEncoding(1024, 16):forward(x)
+  mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+
   for t = 1, ntests do
     local dim1 = math.random(1, max_dim1)
     local dim2 = math.random(1, max_dim2)
@@ -127,7 +138,7 @@ function nntest.SinusoidPositionEncoding()
 
     local module = nn.SinusoidPositionEncoding(1024, dim3)
 
-      -- 3D
+    -- 3D
     local input = torch.rand(dim1,dim2,dim3):zero()
     local err = jac.testJacobian(module,input)
     mytester:assertlt(err,precision, 'error on state ')
@@ -144,6 +155,16 @@ function nntest.MultiHeadAttention()
   local max_dim1 = 8
   local max_dim2 = 16
   local max_dim3 = 16
+
+  local x = torch.rand(8, 32, 16)
+  x[{{}, {1,2}}]:zero()
+  x[{{}, {10,11}}]:zero()
+
+  local y = nn.MultiHeadAttention(8, 16, 0.1):forward(x)
+  mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
 
   for t = 1, ntests do
     local dim1 = math.random(1, max_dim1)
@@ -170,6 +191,16 @@ function nntest.PositionWiseFFNN()
   local max_dim2 = 16
   local max_dim3 = 16
   local max_dff  = 16
+
+  local x = torch.rand(8, 32, 16)
+  x[{{}, {1,2}}]:zero()
+  x[{{}, {10,11}}]:zero()
+
+  local y = nn.PositionWiseFFNN(16, 3, 0.1):forward(x)
+  mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
 
   for t = 1, ntests do
     local dim1 = math.random(1, max_dim1)
@@ -203,13 +234,22 @@ function nntest.LayerNorm()
   local max_dim3 = 16
 
   -- manual test
+  local x = torch.rand(8, 32, 16)
+  x[{{}, {1,2}}]:zero()
+  x[{{}, {10,11}}]:zero()
+
+  local y = nn.LayerNorm(8, 16, 1e-10, true):forward(x)
+  mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
+  mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+
   local x = torch.rand(5,2,3)
   z = nn.LayerNorm(5, 3, 1e-10, false):forward(x)
   for i = 1, x:size(1) do
     mytester:assertlt(torch.sum(torch.abs(z[i] - ln(x[i]))),precision, 'error on manual test ')
   end
   nn.LayerNorm(5, 3, 1e-10, true):forward(x)
-
 
   for t = 1, ntests do
     local dim1 = math.random(1, max_dim1)

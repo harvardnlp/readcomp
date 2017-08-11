@@ -371,14 +371,14 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   collect_track_garbage()
 end
 
-function build_doc_encoder(use_lookup, in_size, in_post_size)
+function build_doc_encoder(use_lookup, in_vocab_size, in_post_vocab_size, in_size, in_post_size, in_extr_size, batchsize, maxseqlen, attstack, atthead, dropout, dff)
   local doc_encoder = nn.Sequential()
 
   if use_lookup then
     -- input layer (i.e. word embedding space)
     -- input is batchsize x seqlen, output is batchsize x seqlen x insize
-    lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
-    lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
+    lookup_text = nn.LookupTableMaskZero(in_vocab_size, in_size)
+    lookup_post = nn.LookupTableMaskZero(in_post_vocab_size, in_post_size)
 
     lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
     lookup_post.maxnormout = -1
@@ -389,33 +389,34 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
 
     featurizer = nn.Sequential()
       :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
-      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + extr_size)
-      :add(nn.SinusoidPositionEncoding(opt.maxseqlen, in_size + in_post_size + extr_size))
+      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + in_extr_size)
+      :add(nn.SinusoidPositionEncoding(maxseqlen, in_size + in_post_size + in_extr_size))
 
     doc_encoder:add(featurizer)
-    if opt.dropout > 0 then
-        doc_encoder:add(nn.Dropout(opt.dropout))
+    if dropout > 0 then
+        doc_encoder:add(nn.Dropout(dropout))
     end
   end
-  in_size = in_size + in_post_size + extr_size
+
+  in_size = in_size + in_post_size + in_extr_size
 
   local selfattention = nn.Sequential()
-  for i = 1, opt.attstack do
+  for i = 1, attstack do
     selfattention
       :add(nn.ConcatTable()
-        :add(nn.MultiHeadAttention(opt.atthead, in_size, opt.dropout))
+        :add(nn.MultiHeadAttention(atthead, in_size, dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
       :add(nn.CAddTable())
-      :add(nn.LayerNorm(opt.batchsize, in_size))
+      :add(nn.LayerNorm(batchsize, in_size))
       :add(nn.ConcatTable()
-        :add(nn.PositionWiseFFNN(in_size, opt.dff, opt.dropout))
+        :add(nn.PositionWiseFFNN(in_size, dff, dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
       :add(nn.CAddTable())
-      :add(nn.LayerNorm(opt.batchsize, in_size))
+      :add(nn.LayerNorm(batchsize, in_size))
   end
 
-  selfattention:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
-  doc_encoder:add(nn.MaskZero(selfattention, 2))
+  selfattention:add(nn.Bottle(nn.MaskZero(nn.Linear(in_size, 1), 1))):add(nn.Squeeze())
+  doc_encoder:add(selfattention)
 
   return doc_encoder
 end
@@ -481,7 +482,8 @@ function build_model()
   if not lm then
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
 
-    Yd = build_doc_encoder(true, opt.inputsize, opt.postsize)
+    Yd = build_doc_encoder(true, vocab_size, post_vocab_size, opt.inputsize, opt.postsize,
+      extr_size, opt.batchsize, opt.maxseqlen, opt.attstack, opt.atthead, opt.dropout, opt.dff)
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
 
     lm = nn.gModule({x_inp}, {nng_Yd})
@@ -577,10 +579,10 @@ function train(params, grad_params, epoch)
     end
 
     local function feval(x)
-       if x ~= params then
-          params:copy(x)
-       end
-       grad_params:zero()
+      if x ~= params then
+        params:copy(x)
+      end
+      grad_params:zero()
 
       -- forward
       local outputs_pre = lm:forward(inputs)
