@@ -200,23 +200,25 @@ function nntest.LayerNorm()
   local ntests = 5
   local max_dim1 = 8
   local max_dim2 = 16
+  local max_dim3 = 16
 
   -- manual test
   local x = torch.rand(5,2,3)
-  z = nn.Bottle(nn.LayerNorm(2, 3, 1e-10, false)):forward(x)
+  z = nn.LayerNorm(5, 3, 1e-10, false):forward(x)
   for i = 1, x:size(1) do
     mytester:assertlt(torch.sum(torch.abs(z[i] - ln(x[i]))),precision, 'error on manual test ')
   end
-  nn.Bottle(nn.LayerNorm(2, 3, 1e-10, true)):forward(x)
+  nn.LayerNorm(5, 3, 1e-10, true):forward(x)
 
 
   for t = 1, ntests do
     local dim1 = math.random(1, max_dim1)
     local dim2 = math.random(1, max_dim2)
+    local dim3 = math.random(1, max_dim3)
 
-    local module = nn.LayerNorm(dim1, dim2, 1e-10, t % 2 == 0)
+    local module = nn.LayerNorm(dim1, dim3, 1e-10, t % 2 == 0)
 
-    local input = torch.rand(dim1,dim2):zero()
+    local input = torch.rand(dim1,dim2,dim3):zero()
     local err = jac.testJacobian(module,input)
     mytester:assertlt(err,precision, 'error on state ')
 

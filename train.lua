@@ -406,16 +406,12 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
         :add(nn.MultiHeadAttention(opt.atthead, in_size, opt.dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
       :add(nn.CAddTable())
-      :add(nn.Transpose({1,2}))
-      :add(nn.Bottle(nn.LayerNorm(opt.batchsize, in_size))) -- seqlen x batchsize x hidsize
-      :add(nn.Transpose({1,2}))
+      :add(nn.LayerNorm(opt.batchsize, in_size))
       :add(nn.ConcatTable()
         :add(nn.PositionWiseFFNN(in_size, opt.dff, opt.dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
       :add(nn.CAddTable())
-      :add(nn.Transpose({1,2}))
-      :add(nn.Bottle(nn.LayerNorm(opt.batchsize, in_size))) -- seqlen x batchsize x hidsize
-      :add(nn.Transpose({1,2}))
+      :add(nn.LayerNorm(opt.batchsize, in_size))
   end
 
   selfattention:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
