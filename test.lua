@@ -207,6 +207,7 @@ function nntest.LayerNorm()
   for i = 1, x:size(1) do
     mytester:assertlt(torch.sum(torch.abs(z[i] - ln(x[i]))),precision, 'error on manual test ')
   end
+  nn.Bottle(nn.LayerNorm(2, 3, 1e-10, true)):forward(x)
 
 
   for t = 1, ntests do
