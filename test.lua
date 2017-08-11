@@ -6,6 +6,7 @@ require 'MaxNodeMarginal'
 require 'SinusoidPositionEncoding'
 require 'MultiHeadAttention'
 require 'PositionWiseFFNN'
+require 'LayerNorm'
 
 local mytester = torch.Tester()
 local jac
@@ -189,6 +190,43 @@ function nntest.PositionWiseFFNN()
   end
 end
 
+function ln(x)
+  xmu = x - x:mean(2):expand(2,3)
+  sigma = torch.sqrt(torch.mean(torch.cmul(xmu, xmu), 2):expand(2,3) + 1e-10)
+  return torch.cdiv(xmu, sigma)
+end
+
+function nntest.LayerNorm()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+
+  -- manual test
+  local x = torch.rand(5,2,3)
+  z = nn.Bottle(nn.LayerNorm(2, 3, 1e-10, false)):forward(x)
+  for i = 1, x:size(1) do
+    mytester:assertlt(torch.sum(torch.abs(z[i] - ln(x[i]))),precision, 'error on manual test ')
+  end
+
+
+  for t = 1, ntests do
+    local dim1 = math.random(1, max_dim1)
+    local dim2 = math.random(1, max_dim2)
+
+    local module = nn.LayerNorm(dim1, dim2, 1e-10, t % 2 == 0)
+
+    local input = torch.rand(dim1,dim2):zero()
+    local err = jac.testJacobian(module,input)
+    mytester:assertlt(err,precision, 'error on state ')
+
+    -- IO
+    local ferr,berr = jac.testIO(module,input)
+    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
+    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
+  end
+end
+
+
 mytester:add(nntest)
 
 jac = nn.Jacobian
@@ -210,5 +248,5 @@ end
 
 nn.test{
   'KMaxFilter', 'MakeDiagonalZero', 'MaskZeroSeqBRNNFinal', 'MaxNodeMarginal', 
-  'SinusoidPositionEncoding', 'MultiHeadAttention'
+  'SinusoidPositionEncoding', 'MultiHeadAttention', 'LayerNorm'
 }

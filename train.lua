@@ -8,6 +8,7 @@ require 'CAddTableBroadcast'
 require 'SinusoidPositionEncoding'
 require 'PositionWiseFFNN'
 require 'MultiHeadAttention'
+require 'LayerNorm'
 require 'optim'
 
 require 'crf/Util.lua'
@@ -375,7 +376,7 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
 
   if use_lookup then
     -- input layer (i.e. word embedding space)
-    -- input is seqlen x batchsize, output is seqlen x batchsize x insize
+    -- input is batchsize x seqlen, output is batchsize x seqlen x insize
     lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
     lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
 
@@ -384,11 +385,11 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
 
     lookup = nn.Sequential()
       :add(nn.ParallelTable():add(lookup_text):add(lookup_post))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
+      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size)
 
     featurizer = nn.Sequential()
       :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
+      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + extr_size)
       :add(nn.SinusoidPositionEncoding(opt.maxseqlen, in_size + in_post_size + extr_size))
 
     doc_encoder:add(featurizer)
@@ -404,12 +405,16 @@ function build_doc_encoder(use_lookup, in_size, in_post_size)
         :add(nn.MultiHeadAttention(opt.atthead, in_size, opt.dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
       :add(nn.CAddTable())
-      :add(nn.Bottle(nn.LayerNormalization(in_size))) -- batchsize x seqlen x hidsize
+      :add(nn.Transpose({1,2}))
+      :add(nn.Bottle(nn.LayerNorm(opt.batchsize, in_size))) -- seqlen x batchsize x hidsize
+      :add(nn.Transpose({1,2}))
       :add(nn.ConcatTable()
         :add(nn.PositionWiseFFNN(in_size, opt.dff, opt.dropout))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
       :add(nn.CAddTable())
-      :add(nn.Bottle(nn.LayerNormalization(in_size))) -- batchsize x seqlen x hidsize
+      :add(nn.Transpose({1,2}))
+      :add(nn.Bottle(nn.LayerNorm(opt.batchsize, in_size))) -- seqlen x batchsize x hidsize
+      :add(nn.Transpose({1,2}))
   end
 
   doc_encoder:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
