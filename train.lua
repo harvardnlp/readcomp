@@ -415,7 +415,7 @@ function build_doc_encoder(use_lookup, in_vocab_size, in_post_vocab_size, in_siz
       :add(nn.LayerNorm(batchsize, in_size))
   end
 
-  selfattention:add(nn.Bottle(nn.MaskZero(nn.Linear(in_size, 1), 1))):add(nn.Squeeze())
+  selfattention:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
   doc_encoder:add(selfattention)
 
   return doc_encoder
