@@ -415,67 +415,51 @@ function build_doc_encoder(use_lookup, in_vocab_size, in_post_vocab_size, in_siz
       :add(nn.LayerNorm(batchsize, in_size))
   end
 
-  selfattention:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
+  selfattention:add(nn.Bottle(nn.Linear(in_size, 2 * in_size)))
   doc_encoder:add(selfattention)
 
   return doc_encoder
 end
 
-function build_query_rnn(use_lookup, in_size)
-  -- for query
-  local lm_query_forward  = nn.Sequential()
+function build_doc_rnn(use_lookup, in_size, in_post_size)
+  local doc_rnn = nn.Sequential()
+
   if use_lookup then
-    local lookup_query_forward = lookup:clone('weight', 'gradWeight')
-    lm_query_forward:add(lookup_query_forward) -- input is seqlen x batchsize
+    -- input layer (i.e. word embedding space)
+    -- input is batchsize x seqlen, output is batchsize x seqlen x insize
+    lookup_rnn_text = nn.LookupTableMaskZero(vocab_size, in_size)
+    lookup_rnn_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
+
+    lookup_rnn_text.maxnormout = -1 -- prevent weird maxnormout behaviour
+    lookup_rnn_post.maxnormout = -1
+
+    lookup_rnn = nn.Sequential()
+      :add(nn.ParallelTable():add(lookup_rnn_text):add(lookup_rnn_post))
+      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size)
+
+    featurizer_rnn = nn.Sequential()
+      :add(nn.ParallelTable():add(lookup_rnn):add(nn.Mul()))
+      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + extr_size)
+
+    doc_rnn:add(featurizer_rnn)
     if opt.dropout > 0 then
-        lm_query_forward:add(nn.Dropout(opt.dropout))
+        doc_rnn:add(nn.Dropout(opt.dropout))
     end
   end
-
-  local lm_query_backward = nn.Sequential()
-  if use_lookup then
-    local lookup_query_backward = lookup:clone('weight', 'gradWeight')
-    lm_query_backward:add(lookup_query_backward) -- input is seqlen x batchsize
-    if opt.dropout > 0 then
-        lm_query_backward:add(nn.Dropout(opt.dropout))
-    end
+  in_size = in_size + in_post_size + extr_size
+  -- rnn layers
+  -- expects input of size batchsize x seqlen x hiddensize
+  local brnn = nn.SeqBRNNP(in_size, in_size, opt.rnntype, opt.projsize, true, nn.JoinTable(3))
+  brnn:MaskZero(true)
+  doc_rnn:add(brnn)
+  if opt.dropout > 0 then
+    doc_rnn:add(nn.Dropout(opt.dropout))
   end
-
-  for i,hiddensize in ipairs(opt.hiddensize) do
-
-    if opt.rnntype == 'gru' then
-      local rnn_forward =  nn.SeqGRU(in_size, hiddensize)
-      rnn_forward.maskzero = true
-      lm_query_forward:add(rnn_forward)
-
-      local rnn_backward =  opt.projsize < 1 and nn.SeqGRU(in_size, hiddensize)
-      rnn_backward.maskzero = true
-      lm_query_backward:add(rnn_backward)
-    else
-      local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
-      rnn_forward.maskzero = true
-      lm_query_forward:add(rnn_forward)
-
-      local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
-      rnn_backward.maskzero = true
-      lm_query_backward:add(rnn_backward)
-    end
-    if opt.dropout > 0 then
-      lm_query_forward:add(nn.Dropout(opt.dropout))
-      lm_query_backward:add(nn.Dropout(opt.dropout))
-    end
-
-    in_size = hiddensize
-  end
-
-  lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
-  lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
-
-  return nn.Sequential()
-    :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
-    :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
-    :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
+  doc_rnn:add(nn.MaskZeroSeqBRNNFinal())
+  doc_rnn:add(nn.Unsqueeze(3))
+  return doc_rnn -- batchsize x seqlen x (2 * hiddensize)
 end
+
 
 function build_model()
 
@@ -484,9 +468,16 @@ function build_model()
 
     Yd = build_doc_encoder(true, vocab_size, post_vocab_size, opt.inputsize, opt.postsize,
       extr_size, opt.batchsize, opt.maxseqlen, opt.attstack, opt.atthead, opt.dropout, opt.dff)
-    nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+    
+    U = build_doc_rnn(true, opt.inputsize, opt.postsize) -- batch x (2 * hiddensize) x 1
 
-    lm = nn.gModule({x_inp}, {nng_Yd})
+    nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+    nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
+
+    Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
+    nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
+
+    lm = nn.gModule({x_inp}, {nng_YdU})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
@@ -500,7 +491,7 @@ function build_model()
 
     -- load pretrained embeddings
     -- IMPORTANT: must do this after random param initialization
-    if data.word_embeddings then
+    if lookup_text and data.word_embeddings then
       local pretrained_vocab_size = data.word_embeddings:size(1)
       print('Using pre-trained Glove word embeddings')
       lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
