@@ -291,5 +291,5 @@ end
 
 nn.test{
   'KMaxFilter', 'MakeDiagonalZero', 'MaskZeroSeqBRNNFinal', 'MaxNodeMarginal', 
-  'SinusoidPositionEncoding', 'MultiHeadAttention', 'LayerNorm'
+  'SinusoidPositionEncoding', 'MultiHeadAttention', 'LayerNorm', 'PositionWiseFFNN'
 }

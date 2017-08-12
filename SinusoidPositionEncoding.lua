@@ -30,15 +30,6 @@ function SinusoidPositionEncoding:updateOutput(input)
    self.output:resizeAs(input):copy(input)
    self.output:add(self.pe[{{1,seqlen}}]:view(1, seqlen, hidsize):expand(batchsize, seqlen, hidsize))
 
-   local nonzeroInput = input:ne(0):sum(3)
-   for b = 1, batchsize do
-      for s = 1, seqlen do
-         if nonzeroInput[b][s][1] == 0 then
-            self.output[b][s]:zero()
-         end
-      end
-   end
-
    return self.output
 end
 
@@ -47,19 +38,5 @@ function SinusoidPositionEncoding:updateGradInput(input, gradOutput)
    assert(input:dim() == 3, 'invalid dimension')
 
    self.gradInput:resizeAs(input):copy(gradOutput)
-
-   local batchsize = input:size(1)
-   local seqlen = input:size(2)
-   local hidsize = input:size(3)
-
-   local nonzeroInput = input:ne(0):sum(3)
-   for b = 1, batchsize do
-      for s = 1, seqlen do
-         if nonzeroInput[b][s][1] == 0 then
-            self.gradInput[b][s]:zero()
-         end
-      end
-   end
-
    return self.gradInput
 end
