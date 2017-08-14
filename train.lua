@@ -7,6 +7,7 @@ require 'MaskZeroSeqBRNNFinal'
 require 'CAddTableBroadcast'
 require 'SinusoidPositionEncoding'
 require 'PositionWiseFFNN'
+require 'MaskSubsequentPositions'
 require 'MultiHeadAttention'
 require 'LayerNorm'
 require 'ShiftRight'
@@ -33,6 +34,7 @@ cmd:option('--gahop', 3, 'number of hops in gated attention model')
 cmd:option('--adamconfig', '{0.9, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
 cmd:option('--cuda', false, 'use CUDA')
+cmd:option('--parallel', false, 'use data parallelism')
 cmd:option('--device', 1, 'sets the device (GPU) to use')
 cmd:option('--profile', false, 'profile updateOutput,updateGradInput and accGradParameters in Sequential')
 cmd:option('--maxbatch', -1, 'maximum number of training batches per epoch')
@@ -344,6 +346,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
         predictions[b] = max_word
       end
     end
+    print(predictions:view(1,-1))
 
     if saved_model_file then
       local out_dump_file = string.format('%s.%s.%03d.dump', saved_model_file, dump_name, i)
@@ -400,53 +403,48 @@ function build_input_embeddings(in_vocab_size, in_post_vocab_size, in_size, in_p
   return emb
 end
 
-function build_doc_encoder(in_size, batchsize, attstack, atthead, dropout, dff)
-  local selfattention = nn.Sequential()
+function build_doc_encoder(in_size, batchsize, atthead, dropout, dff)
+  return nn.Sequential()
+    :add(nn.ConcatTable()
+      :add(nn.MultiHeadAttention(atthead, in_size, dropout, false, true))
+      :add(nn.Identity())) -- batchsize x seqlen x hidsize
+    :add(nn.CAddTable())
+    :add(nn.LayerNorm(batchsize, in_size))
+    :add(nn.ConcatTable()
+      :add(nn.PositionWiseFFNN(in_size, dff, dropout))
+      :add(nn.Identity())) -- batchsize x seqlen x hidsize
+    :add(nn.CAddTable())
+    :add(nn.LayerNorm(batchsize, in_size))
+end
 
-  for i = 1, attstack do
-    local encoder = nn.Sequential()
-      :add(nn.ConcatTable()
-        :add(nn.MultiHeadAttention(atthead, in_size, dropout, mask_subsequent = false, single_input = true))
-        :add(nn.Identity())) -- batchsize x seqlen x hidsize
-      :add(nn.CAddTable())
-      :add(nn.LayerNorm(batchsize, in_size))
-      :add(nn.ConcatTable()
-        :add(nn.PositionWiseFFNN(in_size, dff, dropout))
-        :add(nn.Identity())) -- batchsize x seqlen x hidsize
-      :add(nn.CAddTable())
-      :add(nn.LayerNorm(batchsize, in_size))
+function build_masked_decoder(in_size, batchsize, atthead, dropout)
+  return nn.Sequential()
+    :add(nn.ConcatTable()
+      :add(nn.MultiHeadAttention(atthead, in_size, dropout, true, true))
+      :add(nn.Identity())) -- batchsize x seqlen x hidsize
+    :add(nn.CAddTable())
+    :add(nn.LayerNorm(batchsize, in_size))
+end
 
-    local masked_decoder = nn.Sequential()
-      :add(nn.ConcatTable()
-        :add(nn.MultiHeadAttention(atthead, in_size, dropout, mask_subsequent = true, single_input = true))
-        :add(nn.Identity())) -- batchsize x seqlen x hidsize
-      :add(nn.CAddTable())
-      :add(nn.LayerNorm(batchsize, in_size))
-
-    selfattention -- input is {QK , V} 
-      :add(nn.ConcatTable()
-        :add(nn.Sequential() -- encoder-decoder attention
-          :add(nn.ParallelTable()
-            :add(encoder) -- input embeddings
-            :add(masked_decoder)) -- output embeddings
-          :add(nn.MultiHeadAttention(atthead, in_size, dropout, mask_subsequent = false, single_input = false)))
-        :add(nn.SelectTable(2))) -- V from previous decoder
-      :add(nn.CAddTable())
-      :add(nn.LayerNorm(batchsize, in_size))
-      :add(nn.ConcatTable()
-        :add(nn.PositionWiseFFNN(in_size, dff, dropout))
-        :add(nn.Identity())) -- batchsize x seqlen x hidsize
-      :add(nn.CAddTable())
-      :add(nn.LayerNorm(batchsize, in_size))
-  end
-
-  selfattention:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
-  return selfattention
+function build_encoder_decoder(in_size, batchsize, atthead, dropout, dff)
+  return nn.Sequential() -- input is {QK , V} 
+    :add(nn.ConcatTable()
+      :add(nn.MultiHeadAttention(atthead, in_size, dropout, false, false))
+      :add(nn.SelectTable(2))) -- V from previous decoder
+    :add(nn.CAddTable())
+    :add(nn.LayerNorm(batchsize, in_size))
+    :add(nn.ConcatTable()
+      :add(nn.PositionWiseFFNN(in_size, dff, dropout))
+      :add(nn.Identity())) -- batchsize x seqlen x hidsize
+    :add(nn.CAddTable())
+    :add(nn.LayerNorm(batchsize, in_size))
 end
 
 function build_model()
 
   if not lm then
+    local dmodel = opt.inputsize + opt.postsize + extr_size
+
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
 
     Embed = build_input_embeddings(vocab_size, post_vocab_size, opt.inputsize, opt.postsize, extr_size, opt.maxseqlen, opt.dropout)
@@ -461,10 +459,29 @@ function build_model()
       :add(Embed:clone('weight', 'gradWeight', 'bias', 'gradBias'))
     nng_out = Shift(x_inp):annotate({name = 'nng_out', description = 'output embeddings'})
 
-    Yd = build_doc_encoder(opt.inputsize + opt.postsize + extr_size, opt.batchsize, opt.attstack, opt.atthead, opt.dropout, opt.dff)
-    nng_Yd = Yd({nng_inp, nng_out}):annotate({name = 'Yd', description = 'memory embeddings'})
+    nng_enc = {}
+    nng_masked_dec = {}
+    nng_enc_dec = {}
 
-    lm = nn.gModule({x_inp}, {nng_Yd})
+    enc = build_doc_encoder(dmodel, opt.batchsize, opt.atthead, opt.dropout, opt.dff)
+    nng_enc[1] = enc(nng_inp):annotate({name = 'enc_1', description = 'encoder output'})
+
+    masked_dec = build_masked_decoder(dmodel, opt.batchsize, opt.atthead, opt.dropout)
+    nng_masked_dec[1] = masked_dec(nng_out):annotate({name = 'masked_dec_1', description = 'masked decoder outputs'})
+
+    enc_dec = build_encoder_decoder(dmodel, opt.batchsize, opt.atthead, opt.dropout, opt.dff)
+    nng_enc_dec[1] = enc_dec({nng_enc[1], nng_masked_dec[1]}):annotate({name = 'enc_dec_1', description = 'encoder-decoder outputs'})
+
+    for l = 2, opt.attstack do
+      nng_enc[l] = enc:clone()(nng_enc[l - 1]):annotate({name = 'enc_'..l, description = 'encoder output'})
+      nng_masked_dec[l] = masked_dec:clone()(nng_enc_dec[l - 1]):annotate({name = 'masked_dec_'..l, description = 'masked decoder outputs'})
+      nng_enc_dec[l] = enc_dec:clone()({nng_enc[l], nng_masked_dec[l]}):annotate({name = 'enc_dec_'..l, description = 'encoder-decoder outputs'})
+    end
+
+    Final = nn.Sequential():add(nn.Bottle(nn.Linear(dmodel, 1))):add(nn.Squeeze())
+    nng_final = Final(nng_enc_dec[opt.attstack]):annotate({name = 'final', description = 'final prediction layer'})
+
+    lm = nn.gModule({x_inp}, {nng_final})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
@@ -502,7 +519,10 @@ function build_model()
     lm:cuda()
     attention_layer:cuda()
 
-    lm = nn.DataParallelTable(2):add(lm, torch.range(1, cutorch.getDeviceCount()):totable()):cuda()
+    if opt.parallel then
+      print('using data parallelism')
+      lm = nn.DataParallelTable(2):add(lm, torch.range(1, cutorch.getDeviceCount()):totable()):cuda()
+    end
   end
 
 end
@@ -564,6 +584,12 @@ function train(params, grad_params, epoch)
 
       -- forward
       local outputs_pre = lm:forward(inputs)
+      print('outputs_pre: min = ' .. outputs_pre:min() .. 
+        ', max = ' .. outputs_pre:max() .. 
+        ', mean = ' .. outputs_pre:mean() .. 
+        ', std = ' .. outputs_pre:std() .. 
+        ', nnz = ' .. outputs_pre[outputs_pre:ne(0)]:size(1) .. ' / ' ..  outputs_pre:numel() .. ' ........')
+
       local outputs = mask_attention(inputs[1][1], outputs_pre)
 
       if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
