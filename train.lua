@@ -9,6 +9,7 @@ require 'SinusoidPositionEncoding'
 require 'PositionWiseFFNN'
 require 'MultiHeadAttention'
 require 'LayerNorm'
+require 'ShiftRight'
 require 'optim'
 
 require 'crf/Util.lua'
@@ -371,41 +372,65 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   collect_track_garbage()
 end
 
-function build_doc_encoder(use_lookup, in_vocab_size, in_post_vocab_size, in_size, in_post_size, in_extr_size, batchsize, maxseqlen, attstack, atthead, dropout, dff)
-  local doc_encoder = nn.Sequential()
+function build_input_embeddings(in_vocab_size, in_post_vocab_size, in_size, in_post_size, in_extr_size, maxseqlen, dropout)
+  local emb = nn.Sequential()
 
-  if use_lookup then
-    -- input layer (i.e. word embedding space)
-    -- input is batchsize x seqlen, output is batchsize x seqlen x insize
-    lookup_text = nn.LookupTableMaskZero(in_vocab_size, in_size)
-    lookup_post = nn.LookupTableMaskZero(in_post_vocab_size, in_post_size)
+  -- input layer (i.e. word embedding space)
+  -- input is batchsize x seqlen, output is batchsize x seqlen x insize
+  lookup_text = nn.LookupTableMaskZero(in_vocab_size, in_size)
+  lookup_post = nn.LookupTableMaskZero(in_post_vocab_size, in_post_size)
 
-    lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
-    lookup_post.maxnormout = -1
+  lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
+  lookup_post.maxnormout = -1
 
-    lookup = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup_text):add(lookup_post))
-      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size)
+  lookup = nn.Sequential()
+    :add(nn.ParallelTable():add(lookup_text):add(lookup_post))
+    :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size)
 
-    featurizer = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
-      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + in_extr_size)
-      :add(nn.SinusoidPositionEncoding(maxseqlen, in_size + in_post_size + in_extr_size))
+  featurizer = nn.Sequential()
+    :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
+    :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + in_extr_size)
+    :add(nn.SinusoidPositionEncoding(maxseqlen, in_size + in_post_size + in_extr_size))
 
-    doc_encoder:add(featurizer)
-    if dropout > 0 then
-        doc_encoder:add(nn.Dropout(dropout))
-    end
+  emb:add(featurizer)
+  if dropout > 0 then
+      emb:add(nn.Dropout(dropout))
   end
 
-  in_size = in_size + in_post_size + in_extr_size
+  return emb
+end
 
+function build_doc_encoder(in_size, batchsize, attstack, atthead, dropout, dff)
   local selfattention = nn.Sequential()
+
   for i = 1, attstack do
-    selfattention
+    local encoder = nn.Sequential()
       :add(nn.ConcatTable()
-        :add(nn.MultiHeadAttention(atthead, in_size, dropout))
+        :add(nn.MultiHeadAttention(atthead, in_size, dropout, mask_subsequent = false, single_input = true))
         :add(nn.Identity())) -- batchsize x seqlen x hidsize
+      :add(nn.CAddTable())
+      :add(nn.LayerNorm(batchsize, in_size))
+      :add(nn.ConcatTable()
+        :add(nn.PositionWiseFFNN(in_size, dff, dropout))
+        :add(nn.Identity())) -- batchsize x seqlen x hidsize
+      :add(nn.CAddTable())
+      :add(nn.LayerNorm(batchsize, in_size))
+
+    local masked_decoder = nn.Sequential()
+      :add(nn.ConcatTable()
+        :add(nn.MultiHeadAttention(atthead, in_size, dropout, mask_subsequent = true, single_input = true))
+        :add(nn.Identity())) -- batchsize x seqlen x hidsize
+      :add(nn.CAddTable())
+      :add(nn.LayerNorm(batchsize, in_size))
+
+    selfattention -- input is {QK , V} 
+      :add(nn.ConcatTable()
+        :add(nn.Sequential() -- encoder-decoder attention
+          :add(nn.ParallelTable()
+            :add(encoder) -- input embeddings
+            :add(masked_decoder)) -- output embeddings
+          :add(nn.MultiHeadAttention(atthead, in_size, dropout, mask_subsequent = false, single_input = false)))
+        :add(nn.SelectTable(2))) -- V from previous decoder
       :add(nn.CAddTable())
       :add(nn.LayerNorm(batchsize, in_size))
       :add(nn.ConcatTable()
@@ -415,69 +440,31 @@ function build_doc_encoder(use_lookup, in_vocab_size, in_post_vocab_size, in_siz
       :add(nn.LayerNorm(batchsize, in_size))
   end
 
-  selfattention:add(nn.Bottle(nn.Linear(in_size, 2 * in_size)))
-  doc_encoder:add(selfattention)
-
-  return doc_encoder
+  selfattention:add(nn.Bottle(nn.Linear(in_size, 1))):add(nn.Squeeze())
+  return selfattention
 end
-
-function build_doc_rnn(use_lookup, in_size, in_post_size)
-  local doc_rnn = nn.Sequential()
-
-  if use_lookup then
-    -- input layer (i.e. word embedding space)
-    -- input is batchsize x seqlen, output is batchsize x seqlen x insize
-    lookup_rnn_text = nn.LookupTableMaskZero(vocab_size, in_size)
-    lookup_rnn_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
-
-    lookup_rnn_text.maxnormout = -1 -- prevent weird maxnormout behaviour
-    lookup_rnn_post.maxnormout = -1
-
-    lookup_rnn = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup_rnn_text):add(lookup_rnn_post))
-      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size)
-
-    featurizer_rnn = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup_rnn):add(nn.Mul()))
-      :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + extr_size)
-
-    doc_rnn:add(featurizer_rnn)
-    if opt.dropout > 0 then
-        doc_rnn:add(nn.Dropout(opt.dropout))
-    end
-  end
-  in_size = in_size + in_post_size + extr_size
-  -- rnn layers
-  -- expects input of size batchsize x seqlen x hiddensize
-  local brnn = nn.SeqBRNNP(in_size, in_size, opt.rnntype, opt.projsize, true, nn.JoinTable(3))
-  brnn:MaskZero(true)
-  doc_rnn:add(brnn)
-  if opt.dropout > 0 then
-    doc_rnn:add(nn.Dropout(opt.dropout))
-  end
-  doc_rnn:add(nn.MaskZeroSeqBRNNFinal())
-  doc_rnn:add(nn.Unsqueeze(3))
-  return doc_rnn -- batchsize x seqlen x (2 * hiddensize)
-end
-
 
 function build_model()
 
   if not lm then
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
 
-    Yd = build_doc_encoder(true, vocab_size, post_vocab_size, opt.inputsize, opt.postsize,
-      extr_size, opt.batchsize, opt.maxseqlen, opt.attstack, opt.atthead, opt.dropout, opt.dff)
-    
-    U = build_doc_rnn(true, opt.inputsize, opt.postsize) -- batch x (2 * hiddensize) x 1
+    Embed = build_input_embeddings(vocab_size, post_vocab_size, opt.inputsize, opt.postsize, extr_size, opt.maxseqlen, opt.dropout)
+    nng_inp = Embed(x_inp):annotate({name = 'nng_inp', description = 'input embeddings'})
 
-    nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
-    nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
+    Shift = nn.Sequential()
+      :add(nn.ParallelTable()
+        :add(nn.ParallelTable()
+            :add(nn.ShiftRight()) -- input text
+            :add(nn.ShiftRight())) -- pos tags
+        :add(nn.ShiftRight())) -- extra features
+      :add(Embed:clone('weight', 'gradWeight', 'bias', 'gradBias'))
+    nng_out = Shift(x_inp):annotate({name = 'nng_out', description = 'output embeddings'})
 
-    Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
-    nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
+    Yd = build_doc_encoder(opt.inputsize + opt.postsize + extr_size, opt.batchsize, opt.attstack, opt.atthead, opt.dropout, opt.dff)
+    nng_Yd = Yd({nng_inp, nng_out}):annotate({name = 'Yd', description = 'memory embeddings'})
 
-    lm = nn.gModule({x_inp}, {nng_YdU})
+    lm = nn.gModule({x_inp}, {nng_Yd})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch

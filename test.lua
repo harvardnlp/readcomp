@@ -1,5 +1,6 @@
 require 'nn'
 require 'rnn'
+require 'ShiftRight'
 require 'KMaxFilter'
 require 'MakeDiagonalZero'
 require 'MaskZeroSeqBRNNFinal'
@@ -9,6 +10,14 @@ require 'MultiHeadAttention'
 require 'PositionWiseFFNN'
 require 'LayerNorm'
 
+
+cmd = torch.CmdLine()
+cmd:text()
+cmd:option('--maskzero', false, 'enable unit tests for maskzero')
+
+cmd:text()
+local opt = cmd:parse(arg or {})
+
 local mytester = torch.Tester()
 local jac
 local sjac
@@ -17,6 +26,29 @@ local precision = 1e-5
 local expprecision = 1.1e-4
 
 local nntest = torch.TestSuite()
+
+function nntest.ShiftRight()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+  local max_dim3 = 16
+
+  for t = 1, ntests do
+    local dim1 = math.random(1, max_dim1)
+    local dim2 = math.random(2, max_dim2)
+    local dim3 = math.random(1, max_dim2)
+
+    local module = nn.ShiftRight()
+
+    local input = torch.rand(dim1,dim2,dim3):zero()
+    local err = jac.testJacobian(module,input)
+    mytester:assertlt(err,precision, 'error on state ')
+
+    local ferr,berr = jac.testIO(module,input)
+    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
+    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
+  end
+end
 
 function nntest.KMaxFilter()
   local ntests = 5
@@ -121,15 +153,17 @@ function nntest.SinusoidPositionEncoding()
   local max_dim2 = 16
   local max_dim3 = 16
 
-  local x = torch.rand(8, 32, 16)
-  x[{{}, {1,2}}]:zero()
-  x[{{}, {10,11}}]:zero()
+  if opt.maskzero then
+    local x = torch.rand(8, 32, 16)
+    x[{{}, {1,2}}]:zero()
+    x[{{}, {10,11}}]:zero()
 
-  local y = nn.SinusoidPositionEncoding(1024, 16):forward(x)
-  mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+    local y = nn.SinusoidPositionEncoding(1024, 16):forward(x)
+    mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+  end
 
   for t = 1, ntests do
     local dim1 = math.random(1, max_dim1)
@@ -156,15 +190,17 @@ function nntest.MultiHeadAttention()
   local max_dim2 = 16
   local max_dim3 = 16
 
-  local x = torch.rand(8, 32, 16)
-  x[{{}, {1,2}}]:zero()
-  x[{{}, {10,11}}]:zero()
+  if opt.maskzero then
+    local x = torch.rand(8, 32, 16)
+    x[{{}, {1,2}}]:zero()
+    x[{{}, {10,11}}]:zero()
 
-  local y = nn.MultiHeadAttention(8, 16, 0.1):forward(x)
-  mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+    local y = nn.MultiHeadAttention(8, 16, 0.1,false,true):forward(x)
+    mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+  end
 
   for t = 1, ntests do
     local dim1 = math.random(1, max_dim1)
@@ -192,15 +228,17 @@ function nntest.PositionWiseFFNN()
   local max_dim3 = 16
   local max_dff  = 16
 
-  local x = torch.rand(8, 32, 16)
-  x[{{}, {1,2}}]:zero()
-  x[{{}, {10,11}}]:zero()
+  if opt.maskzero then
+    local x = torch.rand(8, 32, 16)
+    x[{{}, {1,2}}]:zero()
+    x[{{}, {10,11}}]:zero()
 
-  local y = nn.PositionWiseFFNN(16, 3, 0.1):forward(x)
-  mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+    local y = nn.PositionWiseFFNN(16, 3, 0.1):forward(x)
+    mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+  end
 
   for t = 1, ntests do
     local dim1 = math.random(1, max_dim1)
@@ -233,16 +271,17 @@ function nntest.LayerNorm()
   local max_dim2 = 16
   local max_dim3 = 16
 
-  -- manual test
-  local x = torch.rand(8, 32, 16)
-  x[{{}, {1,2}}]:zero()
-  x[{{}, {10,11}}]:zero()
+  if opt.maskzero then
+    local x = torch.rand(8, 32, 16)
+    x[{{}, {1,2}}]:zero()
+    x[{{}, {10,11}}]:zero()
 
-  local y = nn.LayerNorm(8, 16, 1e-10, true):forward(x)
-  mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
-  mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+    local y = nn.LayerNorm(8, 16, 1e-10, true):forward(x)
+    mytester:assertlt(y[{{}, 1}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{}, 2}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{},10}]:ne(0):sum(),precision, 'error on maskzero ')
+    mytester:assertlt(y[{{},11}]:ne(0):sum(),precision, 'error on maskzero ')
+  end
 
   local x = torch.rand(5,2,3)
   z = nn.LayerNorm(5, 3, 1e-10, false):forward(x)
@@ -269,7 +308,6 @@ function nntest.LayerNorm()
   end
 end
 
-
 mytester:add(nntest)
 
 jac = nn.Jacobian
@@ -290,6 +328,13 @@ function nn.test(tests, seed)
 end
 
 nn.test{
-  'KMaxFilter', 'MakeDiagonalZero', 'MaskZeroSeqBRNNFinal', 'MaxNodeMarginal', 
-  'SinusoidPositionEncoding', 'MultiHeadAttention', 'LayerNorm', 'PositionWiseFFNN'
+  'ShiftRight',
+  'KMaxFilter', 
+  'MakeDiagonalZero', 
+  'MaskZeroSeqBRNNFinal', 
+  'MaxNodeMarginal', 
+  'SinusoidPositionEncoding', 
+  'MultiHeadAttention', 
+  'LayerNorm', 
+  'PositionWiseFFNN'
 }
