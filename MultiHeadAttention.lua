@@ -27,10 +27,10 @@ function MultiHeadAttention:__init(h, dmodel, dropout, mask_subsequent, single_i
       :add(nn.MM()) -- Q * K^T : batchsize x seqlen x seqlen
       :add(nn.MulConstant(1 / math.sqrt(dk))) -- scaled dot-product attention
 
-    if mask_subsequent == true then
-      SQTK:add(nn.MaskSubsequentPositions())
-    end
-    SQTK:add(nn.Bottle(self:SoftMaxDropout(dropout)))
+    -- if mask_subsequent == true then
+    --   SQTK:add(nn.MaskSubsequentPositions())
+    -- end
+    -- SQTK:add(nn.Bottle(self:SoftMaxDropout(dropout)))
 
     local all_input = single_input and nn.ConcatTable() or nn.ParallelTable()
     all_input:add(SQTK):add(nn.Bottle(nn.Linear(dmodel, dv))) -- V : batchsize x seqlen x dv

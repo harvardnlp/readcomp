@@ -346,7 +346,6 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
         predictions[b] = max_word
       end
     end
-    print(predictions:view(1,-1))
 
     if saved_model_file then
       local out_dump_file = string.format('%s.%s.%03d.dump', saved_model_file, dump_name, i)
@@ -393,7 +392,7 @@ function build_input_embeddings(in_vocab_size, in_post_vocab_size, in_size, in_p
   featurizer = nn.Sequential()
     :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
     :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + in_extr_size)
-    :add(nn.SinusoidPositionEncoding(maxseqlen, in_size + in_post_size + in_extr_size))
+    -- :add(nn.SinusoidPositionEncoding(maxseqlen, in_size + in_post_size + in_extr_size))
 
   emb:add(featurizer)
   if dropout > 0 then
@@ -409,12 +408,14 @@ function build_doc_encoder(in_size, batchsize, atthead, dropout, dff)
       :add(nn.MultiHeadAttention(atthead, in_size, dropout, false, true))
       :add(nn.Identity())) -- batchsize x seqlen x hidsize
     :add(nn.CAddTable())
-    :add(nn.LayerNorm(batchsize, in_size))
-    :add(nn.ConcatTable()
-      :add(nn.PositionWiseFFNN(in_size, dff, dropout))
-      :add(nn.Identity())) -- batchsize x seqlen x hidsize
-    :add(nn.CAddTable())
-    :add(nn.LayerNorm(batchsize, in_size))
+    :add(nn.Bottle(nn.Normalize(2)))
+    --:add(nn.LayerNorm(batchsize, in_size))
+    -- :add(nn.ConcatTable()
+    --   :add(nn.PositionWiseFFNN(in_size, dff, dropout))
+    --   :add(nn.Identity())) -- batchsize x seqlen x hidsize
+    -- :add(nn.CAddTable())
+    -- :add(nn.Bottle(nn.Normalize(2)))
+    --:add(nn.LayerNorm(batchsize, in_size))
 end
 
 function build_masked_decoder(in_size, batchsize, atthead, dropout)
@@ -423,7 +424,8 @@ function build_masked_decoder(in_size, batchsize, atthead, dropout)
       :add(nn.MultiHeadAttention(atthead, in_size, dropout, true, true))
       :add(nn.Identity())) -- batchsize x seqlen x hidsize
     :add(nn.CAddTable())
-    :add(nn.LayerNorm(batchsize, in_size))
+    :add(nn.Bottle(nn.Normalize(2)))
+    --:add(nn.LayerNorm(batchsize, in_size))
 end
 
 function build_encoder_decoder(in_size, batchsize, atthead, dropout, dff)
@@ -432,12 +434,14 @@ function build_encoder_decoder(in_size, batchsize, atthead, dropout, dff)
       :add(nn.MultiHeadAttention(atthead, in_size, dropout, false, false))
       :add(nn.SelectTable(2))) -- V from previous decoder
     :add(nn.CAddTable())
-    :add(nn.LayerNorm(batchsize, in_size))
+    :add(nn.Bottle(nn.Normalize(2)))
+    --:add(nn.LayerNorm(batchsize, in_size))
     :add(nn.ConcatTable()
       :add(nn.PositionWiseFFNN(in_size, dff, dropout))
       :add(nn.Identity())) -- batchsize x seqlen x hidsize
     :add(nn.CAddTable())
-    :add(nn.LayerNorm(batchsize, in_size))
+    :add(nn.Bottle(nn.Normalize(2)))
+    --:add(nn.LayerNorm(batchsize, in_size))
 end
 
 function build_model()
@@ -450,14 +454,14 @@ function build_model()
     Embed = build_input_embeddings(vocab_size, post_vocab_size, opt.inputsize, opt.postsize, extr_size, opt.maxseqlen, opt.dropout)
     nng_inp = Embed(x_inp):annotate({name = 'nng_inp', description = 'input embeddings'})
 
-    Shift = nn.Sequential()
-      :add(nn.ParallelTable()
-        :add(nn.ParallelTable()
-            :add(nn.ShiftRight()) -- input text
-            :add(nn.ShiftRight())) -- pos tags
-        :add(nn.ShiftRight())) -- extra features
-      :add(Embed:clone('weight', 'gradWeight', 'bias', 'gradBias'))
-    nng_out = Shift(x_inp):annotate({name = 'nng_out', description = 'output embeddings'})
+    -- Shift = nn.Sequential()
+    --   :add(nn.ParallelTable()
+    --     :add(nn.ParallelTable()
+    --         :add(nn.ShiftRight()) -- input text
+    --         :add(nn.ShiftRight())) -- pos tags
+    --     :add(nn.ShiftRight())) -- extra features
+    --   :add(Embed:clone('weight', 'gradWeight', 'bias', 'gradBias'))
+    -- nng_out = Shift(x_inp):annotate({name = 'nng_out', description = 'output embeddings'})
 
     nng_enc = {}
     nng_masked_dec = {}
@@ -466,20 +470,20 @@ function build_model()
     enc = build_doc_encoder(dmodel, opt.batchsize, opt.atthead, opt.dropout, opt.dff)
     nng_enc[1] = enc(nng_inp):annotate({name = 'enc_1', description = 'encoder output'})
 
-    masked_dec = build_masked_decoder(dmodel, opt.batchsize, opt.atthead, opt.dropout)
-    nng_masked_dec[1] = masked_dec(nng_out):annotate({name = 'masked_dec_1', description = 'masked decoder outputs'})
+    -- masked_dec = build_masked_decoder(dmodel, opt.batchsize, opt.atthead, opt.dropout)
+    -- nng_masked_dec[1] = masked_dec(nng_out):annotate({name = 'masked_dec_1', description = 'masked decoder outputs'})
 
-    enc_dec = build_encoder_decoder(dmodel, opt.batchsize, opt.atthead, opt.dropout, opt.dff)
-    nng_enc_dec[1] = enc_dec({nng_enc[1], nng_masked_dec[1]}):annotate({name = 'enc_dec_1', description = 'encoder-decoder outputs'})
+    -- enc_dec = build_encoder_decoder(dmodel, opt.batchsize, opt.atthead, opt.dropout, opt.dff)
+    -- nng_enc_dec[1] = enc_dec({nng_enc[1], nng_masked_dec[1]}):annotate({name = 'enc_dec_1', description = 'encoder-decoder outputs'})
 
     for l = 2, opt.attstack do
       nng_enc[l] = enc:clone()(nng_enc[l - 1]):annotate({name = 'enc_'..l, description = 'encoder output'})
-      nng_masked_dec[l] = masked_dec:clone()(nng_enc_dec[l - 1]):annotate({name = 'masked_dec_'..l, description = 'masked decoder outputs'})
-      nng_enc_dec[l] = enc_dec:clone()({nng_enc[l], nng_masked_dec[l]}):annotate({name = 'enc_dec_'..l, description = 'encoder-decoder outputs'})
+      -- nng_masked_dec[l] = masked_dec:clone()(nng_enc_dec[l - 1]):annotate({name = 'masked_dec_'..l, description = 'masked decoder outputs'})
+      -- nng_enc_dec[l] = enc_dec:clone()({nng_enc[l], nng_masked_dec[l]}):annotate({name = 'enc_dec_'..l, description = 'encoder-decoder outputs'})
     end
 
     Final = nn.Sequential():add(nn.Bottle(nn.Linear(dmodel, 1))):add(nn.Squeeze())
-    nng_final = Final(nng_enc_dec[opt.attstack]):annotate({name = 'final', description = 'final prediction layer'})
+    nng_final = Final(nng_enc[opt.attstack]):annotate({name = 'final', description = 'final prediction layer'})
 
     lm = nn.gModule({x_inp}, {nng_final})
 
@@ -584,11 +588,11 @@ function train(params, grad_params, epoch)
 
       -- forward
       local outputs_pre = lm:forward(inputs)
-      print('outputs_pre: min = ' .. outputs_pre:min() .. 
-        ', max = ' .. outputs_pre:max() .. 
-        ', mean = ' .. outputs_pre:mean() .. 
-        ', std = ' .. outputs_pre:std() .. 
-        ', nnz = ' .. outputs_pre[outputs_pre:ne(0)]:size(1) .. ' / ' ..  outputs_pre:numel() .. ' ........')
+      -- print('outputs_pre: min = ' .. outputs_pre:min() .. 
+      --   ', max = ' .. outputs_pre:max() .. 
+      --   ', mean = ' .. outputs_pre:mean() .. 
+      --   ', std = ' .. outputs_pre:std() .. 
+      --   ', nnz = ' .. outputs_pre[outputs_pre:ne(0)]:size(1) .. ' / ' ..  outputs_pre:numel() .. ' ........')
 
       local outputs = mask_attention(inputs[1][1], outputs_pre)
 
