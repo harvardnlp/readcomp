@@ -5,12 +5,6 @@ require 'nngraph'
 require 'SeqBRNNP'
 require 'MaskZeroSeqBRNNFinal'
 require 'CAddTableBroadcast'
-require 'SinusoidPositionEncoding'
-require 'PositionWiseFFNN'
-require 'MaskSubsequentPositions'
-require 'MultiHeadAttention'
-require 'LayerNorm'
-require 'ShiftRight'
 require 'optim'
 
 require 'crf/Util.lua'
@@ -34,14 +28,10 @@ cmd:option('--gahop', 3, 'number of hops in gated attention model')
 cmd:option('--adamconfig', '{0.9, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
 cmd:option('--cuda', false, 'use CUDA')
-cmd:option('--parallel', false, 'use data parallelism')
 cmd:option('--device', 1, 'sets the device (GPU) to use')
 cmd:option('--profile', false, 'profile updateOutput,updateGradInput and accGradParameters in Sequential')
 cmd:option('--maxbatch', -1, 'maximum number of training batches per epoch')
 cmd:option('--maxepoch', 10, 'maximum number of epochs to run')
-cmd:option('--attstack', 6, 'number of multi-self-attention layers')
-cmd:option('--atthead', 8, 'number of attention heads in multi-self-attention')
-cmd:option('--dff', 2048, 'number of hidden units for the inner layer of position-wise FFNN')
 cmd:option('--gcepoch', 1000, 'specify #-epoch interval to perform garbage collection')
 cmd:option('--maxseqlen', 1024, 'maximum sequence length for context and target')
 cmd:option('--earlystop', 5, 'maximum number of epochs to wait to find a better local minima for early-stopping')
@@ -268,12 +258,10 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   end
 
   if opt.cuda then
-    context = context:cuda()
-    context_post = context_post:cuda()
     context_extr = context_extr:cuda()
   end
 
-  contexts = { {context:t(), context_post:t()}, context_extr:transpose(1,2) }
+  contexts = { {context, context_post}, context_extr}
   return contexts, answer, answer_ind
 end
 
@@ -326,7 +314,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
         local max_prob = 0
         local max_word = 0
         for iw = 1, outputs:size(2) do
-          local word = in_words[b][iw]
+          local word = in_words[iw][b]
           if word ~= 0 then
             if word_to_prob[word] == nil then
               word_to_prob[word] = 0
@@ -374,118 +362,117 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   collect_track_garbage()
 end
 
-function build_input_embeddings(in_vocab_size, in_post_vocab_size, in_size, in_post_size, in_extr_size, maxseqlen, dropout)
-  local emb = nn.Sequential()
+function build_doc_rnn(use_lookup, in_size, in_post_size)
+  local doc_rnn = nn.Sequential()
 
-  -- input layer (i.e. word embedding space)
-  -- input is batchsize x seqlen, output is batchsize x seqlen x insize
-  lookup_text = nn.LookupTableMaskZero(in_vocab_size, in_size)
-  lookup_post = nn.LookupTableMaskZero(in_post_vocab_size, in_post_size)
+  if use_lookup then
+    -- input layer (i.e. word embedding space)
+    -- input is seqlen x batchsize, output is seqlen x batchsize x insize
+    lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
+    lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
 
-  lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
-  lookup_post.maxnormout = -1
+    lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
+    lookup_post.maxnormout = -1
 
-  lookup = nn.Sequential()
-    :add(nn.ParallelTable():add(lookup_text):add(lookup_post))
-    :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size)
+    lookup = nn.Sequential()
+      :add(nn.ParallelTable():add(lookup_text):add(lookup_post))
+      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
 
-  featurizer = nn.Sequential()
-    :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
-    :add(nn.JoinTable(3)) -- batchsize x seqlen x (insize + in_post_size + in_extr_size)
-    -- :add(nn.SinusoidPositionEncoding(maxseqlen, in_size + in_post_size + in_extr_size))
+    featurizer = nn.Sequential()
+      :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
+      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
 
-  emb:add(featurizer)
-  if dropout > 0 then
-      emb:add(nn.Dropout(dropout))
+    doc_rnn:add(featurizer)
+    if opt.dropout > 0 then
+        doc_rnn:add(nn.Dropout(opt.dropout))
+    end
+  end
+  in_size = in_size + in_post_size + extr_size
+  -- rnn layers
+  for i,hiddensize in ipairs(opt.hiddensize) do
+    -- expects input of size seqlen x batchsize x hiddensize
+    local brnn = nn.SeqBRNNP(in_size, hiddensize, opt.rnntype, opt.projsize, false, nn.JoinTable(3))
+    brnn:MaskZero(true)
+    doc_rnn:add(brnn)
+    if opt.dropout > 0 then
+      doc_rnn:add(nn.Dropout(opt.dropout))
+    end
+    in_size = 2 * hiddensize
+  end
+  doc_rnn:add(nn.Transpose({1,2})) -- batchsize x seqlen x (2 * hiddensize)
+  return doc_rnn
+end
+
+function build_query_rnn(use_lookup, in_size)
+  -- for query
+  local lm_query_forward  = nn.Sequential()
+  if use_lookup then
+    local lookup_query_forward = lookup:clone('weight', 'gradWeight')
+    lm_query_forward:add(lookup_query_forward) -- input is seqlen x batchsize
+    if opt.dropout > 0 then
+        lm_query_forward:add(nn.Dropout(opt.dropout))
+    end
   end
 
-  return emb
-end
+  local lm_query_backward = nn.Sequential()
+  if use_lookup then
+    local lookup_query_backward = lookup:clone('weight', 'gradWeight')
+    lm_query_backward:add(lookup_query_backward) -- input is seqlen x batchsize
+    if opt.dropout > 0 then
+        lm_query_backward:add(nn.Dropout(opt.dropout))
+    end
+  end
 
-function build_doc_encoder(in_size, batchsize, atthead, dropout, dff)
+  for i,hiddensize in ipairs(opt.hiddensize) do
+
+    if opt.rnntype == 'gru' then
+      local rnn_forward =  nn.SeqGRU(in_size, hiddensize)
+      rnn_forward.maskzero = true
+      lm_query_forward:add(rnn_forward)
+
+      local rnn_backward =  opt.projsize < 1 and nn.SeqGRU(in_size, hiddensize)
+      rnn_backward.maskzero = true
+      lm_query_backward:add(rnn_backward)
+    else
+      local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
+      rnn_forward.maskzero = true
+      lm_query_forward:add(rnn_forward)
+
+      local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
+      rnn_backward.maskzero = true
+      lm_query_backward:add(rnn_backward)
+    end
+    if opt.dropout > 0 then
+      lm_query_forward:add(nn.Dropout(opt.dropout))
+      lm_query_backward:add(nn.Dropout(opt.dropout))
+    end
+
+    in_size = hiddensize
+  end
+
+  lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
+  lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
+
   return nn.Sequential()
-    :add(nn.ConcatTable()
-      :add(nn.MultiHeadAttention(atthead, in_size, dropout, false, true))
-      :add(nn.Identity())) -- batchsize x seqlen x hidsize
-    :add(nn.CAddTable())
-    :add(nn.Bottle(nn.Normalize(2)))
-    --:add(nn.LayerNorm(batchsize, in_size))
-    -- :add(nn.ConcatTable()
-    --   :add(nn.PositionWiseFFNN(in_size, dff, dropout))
-    --   :add(nn.Identity())) -- batchsize x seqlen x hidsize
-    -- :add(nn.CAddTable())
-    -- :add(nn.Bottle(nn.Normalize(2)))
-    --:add(nn.LayerNorm(batchsize, in_size))
-end
-
-function build_masked_decoder(in_size, batchsize, atthead, dropout)
-  return nn.Sequential()
-    :add(nn.ConcatTable()
-      :add(nn.MultiHeadAttention(atthead, in_size, dropout, true, true))
-      :add(nn.Identity())) -- batchsize x seqlen x hidsize
-    :add(nn.CAddTable())
-    :add(nn.Bottle(nn.Normalize(2)))
-    --:add(nn.LayerNorm(batchsize, in_size))
-end
-
-function build_encoder_decoder(in_size, batchsize, atthead, dropout, dff)
-  return nn.Sequential() -- input is {QK , V} 
-    :add(nn.ConcatTable()
-      :add(nn.MultiHeadAttention(atthead, in_size, dropout, false, false))
-      :add(nn.SelectTable(2))) -- V from previous decoder
-    :add(nn.CAddTable())
-    :add(nn.Bottle(nn.Normalize(2)))
-    --:add(nn.LayerNorm(batchsize, in_size))
-    :add(nn.ConcatTable()
-      :add(nn.PositionWiseFFNN(in_size, dff, dropout))
-      :add(nn.Identity())) -- batchsize x seqlen x hidsize
-    :add(nn.CAddTable())
-    :add(nn.Bottle(nn.Normalize(2)))
-    --:add(nn.LayerNorm(batchsize, in_size))
+    :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
+    :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
+    :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 end
 
 function build_model()
 
   if not lm then
-    local dmodel = opt.inputsize + opt.postsize + extr_size
+    Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
+    U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
 
-    Embed = build_input_embeddings(vocab_size, post_vocab_size, opt.inputsize, opt.postsize, extr_size, opt.maxseqlen, opt.dropout)
-    nng_inp = Embed(x_inp):annotate({name = 'nng_inp', description = 'input embeddings'})
+    nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+    nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
 
-    -- Shift = nn.Sequential()
-    --   :add(nn.ParallelTable()
-    --     :add(nn.ParallelTable()
-    --         :add(nn.ShiftRight()) -- input text
-    --         :add(nn.ShiftRight())) -- pos tags
-    --     :add(nn.ShiftRight())) -- extra features
-    --   :add(Embed:clone('weight', 'gradWeight', 'bias', 'gradBias'))
-    -- nng_out = Shift(x_inp):annotate({name = 'nng_out', description = 'output embeddings'})
-
-    nng_enc = {}
-    nng_masked_dec = {}
-    nng_enc_dec = {}
-
-    enc = build_doc_encoder(dmodel, opt.batchsize, opt.atthead, opt.dropout, opt.dff)
-    nng_enc[1] = enc(nng_inp):annotate({name = 'enc_1', description = 'encoder output'})
-
-    -- masked_dec = build_masked_decoder(dmodel, opt.batchsize, opt.atthead, opt.dropout)
-    -- nng_masked_dec[1] = masked_dec(nng_out):annotate({name = 'masked_dec_1', description = 'masked decoder outputs'})
-
-    -- enc_dec = build_encoder_decoder(dmodel, opt.batchsize, opt.atthead, opt.dropout, opt.dff)
-    -- nng_enc_dec[1] = enc_dec({nng_enc[1], nng_masked_dec[1]}):annotate({name = 'enc_dec_1', description = 'encoder-decoder outputs'})
-
-    for l = 2, opt.attstack do
-      nng_enc[l] = enc:clone()(nng_enc[l - 1]):annotate({name = 'enc_'..l, description = 'encoder output'})
-      -- nng_masked_dec[l] = masked_dec:clone()(nng_enc_dec[l - 1]):annotate({name = 'masked_dec_'..l, description = 'masked decoder outputs'})
-      -- nng_enc_dec[l] = enc_dec:clone()({nng_enc[l], nng_masked_dec[l]}):annotate({name = 'enc_dec_'..l, description = 'encoder-decoder outputs'})
-    end
-
-    Final = nn.Sequential():add(nn.Bottle(nn.Linear(dmodel, 1))):add(nn.Squeeze())
-    nng_final = Final(nng_enc[opt.attstack]):annotate({name = 'final', description = 'final prediction layer'})
-
-    lm = nn.gModule({x_inp}, {nng_final})
+    Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
+    nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
+    lm = nn.gModule({x_inp}, {nng_YdU})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
@@ -499,7 +486,7 @@ function build_model()
 
     -- load pretrained embeddings
     -- IMPORTANT: must do this after random param initialization
-    if lookup_text and data.word_embeddings then
+    if data.word_embeddings then
       local pretrained_vocab_size = data.word_embeddings:size(1)
       print('Using pre-trained Glove word embeddings')
       lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
@@ -522,21 +509,15 @@ function build_model()
   if opt.cuda then
     lm:cuda()
     attention_layer:cuda()
-
-    if opt.parallel then
-      print('using data parallelism')
-      lm = nn.DataParallelTable(2):add(lm, torch.range(1, cutorch.getDeviceCount()):totable()):cuda()
-    end
   end
-
 end
 
 function mask_attention(input_context, output_pre_attention)
   -- attention while masking out stopwords, punctuations
-  for i = 1, input_context:size(1) do -- batchsize
-    for j = 1, input_context:size(2) do -- seqlen
+  for i = 1, input_context:size(1) do -- seqlen
+    for j = 1, input_context:size(2) do -- batchsize
       if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
-        output_pre_attention[i][j] = -math.huge
+        output_pre_attention[j][i] = -math.huge
       end
     end
   end
@@ -544,12 +525,12 @@ function mask_attention(input_context, output_pre_attention)
 end
 
 function mask_attention_gradients(input_context, output_grad)
-  -- input_context is batchsize x seqlen
+  -- input_context is seqlen x batchsize
   -- output_grad is batchsize x seqlen
   for i = 1, input_context:size(1) do
     for j = 1, input_context:size(2) do
       if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
-        output_grad[i][j] = 0
+        output_grad[j][i] = 0
       end
     end
   end
@@ -581,19 +562,13 @@ function train(params, grad_params, epoch)
     end
 
     local function feval(x)
-      if x ~= params then
-        params:copy(x)
-      end
-      grad_params:zero()
+       if x ~= params then
+          params:copy(x)
+       end
+       grad_params:zero()
 
       -- forward
       local outputs_pre = lm:forward(inputs)
-      -- print('outputs_pre: min = ' .. outputs_pre:min() .. 
-      --   ', max = ' .. outputs_pre:max() .. 
-      --   ', mean = ' .. outputs_pre:mean() .. 
-      --   ', std = ' .. outputs_pre:std() .. 
-      --   ', nnz = ' .. outputs_pre[outputs_pre:ne(0)]:size(1) .. ' / ' ..  outputs_pre:numel() .. ' ........')
-
       local outputs = mask_attention(inputs[1][1], outputs_pre)
 
       if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
@@ -665,7 +640,7 @@ function train(params, grad_params, epoch)
             print(answer_inds[ib])
             print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]] .. ', ib = ' .. ib)
             print('inputs')
-            print(inputs[1][1][{ib, {}}]:contiguous():view(1,-1))
+            print(inputs[1][1][{{}, ib}]:contiguous():view(1,-1))
             print('outputs_pre')
             print(outputs_pre[ib]:view(1,-1))
             print('outputs')
@@ -813,13 +788,12 @@ function validate(ntrial, epoch)
 
   -- early-stopping
   if validloss < xplog.minvalloss then
+    test_model()
+
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch 
     local filename = paths.concat(opt.savepath, opt.id..'.t7')
-    
-    test_model()
-
     if not opt.dontsave then
       print("Found new minima. Saving to "..filename)
       torch.save(filename, xplog)
