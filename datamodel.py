@@ -2,6 +2,7 @@ import numpy as np
 import codecs
 import os
 import nltk
+import re
 
 UNKNOWN = '<unk>'
 GLOVE_DIM = 100
