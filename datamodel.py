@@ -220,6 +220,12 @@ class Corpus(object):
 
         if answer in self.dictionary.punc2idx or answer in self.dictionary.stop2idx:
           puncstop_answer_count += 1
+          print_msg('INFO: SKIPPING... Target-Answer is either a stop word or punctuation, line = {}'.format(line), 2, self.args_verbose_level)
+          continue
+
+        if re.search('[a-z]', answer) == None:
+          print_msg('INFO: SKIPPING... Target-Answer is not valid, line = {}'.format(line), 2, self.args_verbose_level)
+          continue
 
         if training:
           # make sure answer is part of context (for computing loss & gradients during training)
