@@ -4,7 +4,6 @@ require 'rnn'
 require 'nngraph'
 require 'SeqBRNNP'
 require 'MaskZeroSeqBRNNFinal'
-require 'Triufy'
 require 'CAddTableBroadcast'
 require 'optim'
 
@@ -383,10 +382,10 @@ function build_doc_rnn(use_lookup, in_size, in_post_size)
       :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
       :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
 
-    if opt.dropout > 0 then
-        featurizer:add(nn.Dropout(opt.dropout))
-    end
     doc_rnn:add(featurizer)
+    if opt.dropout > 0 then
+        doc_rnn:add(nn.Dropout(opt.dropout))
+    end
   end
   in_size = in_size + in_post_size + extr_size
   -- rnn layers
@@ -404,26 +403,75 @@ function build_doc_rnn(use_lookup, in_size, in_post_size)
   return doc_rnn
 end
 
+function build_query_rnn(use_lookup, in_size)
+  -- for query
+  local lm_query_forward  = nn.Sequential()
+  if use_lookup then
+    local lookup_query_forward = lookup:clone('weight', 'gradWeight')
+    lm_query_forward:add(lookup_query_forward) -- input is seqlen x batchsize
+    if opt.dropout > 0 then
+        lm_query_forward:add(nn.Dropout(opt.dropout))
+    end
+  end
+
+  local lm_query_backward = nn.Sequential()
+  if use_lookup then
+    local lookup_query_backward = lookup:clone('weight', 'gradWeight')
+    lm_query_backward:add(lookup_query_backward) -- input is seqlen x batchsize
+    if opt.dropout > 0 then
+        lm_query_backward:add(nn.Dropout(opt.dropout))
+    end
+  end
+
+  for i,hiddensize in ipairs(opt.hiddensize) do
+
+    if opt.rnntype == 'gru' then
+      local rnn_forward =  nn.SeqGRU(in_size, hiddensize)
+      rnn_forward.maskzero = true
+      lm_query_forward:add(rnn_forward)
+
+      local rnn_backward =  opt.projsize < 1 and nn.SeqGRU(in_size, hiddensize)
+      rnn_backward.maskzero = true
+      lm_query_backward:add(rnn_backward)
+    else
+      local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
+      rnn_forward.maskzero = true
+      lm_query_forward:add(rnn_forward)
+
+      local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
+      rnn_backward.maskzero = true
+      lm_query_backward:add(rnn_backward)
+    end
+    if opt.dropout > 0 then
+      lm_query_forward:add(nn.Dropout(opt.dropout))
+      lm_query_backward:add(nn.Dropout(opt.dropout))
+    end
+
+    in_size = hiddensize
+  end
+
+  lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
+  lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
+
+  return nn.Sequential()
+    :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
+    :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
+    :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
+end
+
 function build_model()
 
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
     U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
-    coref1 = featurizer:clone():add(nn.Transpose({1,2}))
-    coref2 = coref1:clone()
-    coref = nn.Sequential():add(nn.ConcatTable():add(coref1):add(coref2)):add(nn.MM(false, true)):add(nn.Triufy())
-
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
 
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
     nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
 
-    nng_Coref = coref(x_inp):annotate({name = 'coref1', description = 'first coref embeddings'})
-    nng_CorefYd = nn.MM()({nng_Coref, nng_Yd}):annotate({name = 'corefYd', description = 'coref Yd'})
-
     Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
-    nng_YdU = Joint({nng_CorefYd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
+    nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
     lm = nn.gModule({x_inp}, {nng_YdU})
 
     -- don't remember previous state between batches since

@@ -9,7 +9,6 @@ require 'SinusoidPositionEncoding'
 require 'MultiHeadAttention'
 require 'PositionWiseFFNN'
 require 'LayerNorm'
-require 'Triufy'
 
 
 cmd = torch.CmdLine()
@@ -309,30 +308,6 @@ function nntest.LayerNorm()
   end
 end
 
-function nntest.Triufy()
-  local ntests = 5
-  local max_dim1 = 8
-  local max_dim2 = 16
-  local max_dim3 = 16
-
-  for t = 1, ntests do
-    local dim1 = math.random(1, max_dim1)
-    local dim2 = math.random(1, max_dim2)
-    local dim3 = math.random(1, max_dim3)
-
-    local module = nn.Triufy()
-
-    local input = torch.rand(dim1,dim2,dim3):zero()
-    local err = jac.testJacobian(module,input)
-    mytester:assertlt(err,precision, 'error on state ')
-
-    -- IO
-    local ferr,berr = jac.testIO(module,input)
-    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
-    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
-  end
-end
-
 mytester:add(nntest)
 
 jac = nn.Jacobian
@@ -361,6 +336,5 @@ nn.test{
   'SinusoidPositionEncoding', 
   'MultiHeadAttention', 
   'LayerNorm', 
-  'PositionWiseFFNN',
-  'Triufy'
+  'PositionWiseFFNN'
 }
