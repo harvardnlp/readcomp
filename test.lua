@@ -9,7 +9,8 @@ require 'SinusoidPositionEncoding'
 require 'MultiHeadAttention'
 require 'PositionWiseFFNN'
 require 'LayerNorm'
-
+require 'MakeValuesZero'
+local tds = require 'tds'
 
 cmd = torch.CmdLine()
 cmd:text()
@@ -308,6 +309,26 @@ function nntest.LayerNorm()
   end
 end
 
+function nntest.MakeValuesZero()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+
+  local values = tds.hash()
+  values[15] = 1
+  values[2] = 1
+  values[6] = 1
+
+  local x1 = torch.LongTensor({ {1, 2, 3}, {4, 5, 6} })
+  local x2 = torch.LongTensor({ {15, 2, 1}, {4, 5, 6} })
+
+  local module = nn.MakeValuesZero(values)
+  local y = module:forward({x1, x2})
+
+  mytester:assertlt(y[1]:ne(torch.LongTensor({{1, 2, 0}, {0, 0, 6}})):sum(), precision, 'error ')
+  mytester:assertlt(y[2]:ne(torch.LongTensor({{15, 2, 0}, {0, 0, 6}})):sum(), precision, 'error ')
+end
+
 mytester:add(nntest)
 
 jac = nn.Jacobian
@@ -336,5 +357,6 @@ nn.test{
   'SinusoidPositionEncoding', 
   'MultiHeadAttention', 
   'LayerNorm', 
-  'PositionWiseFFNN'
+  'PositionWiseFFNN',
+  'MakeValuesZero'
 }

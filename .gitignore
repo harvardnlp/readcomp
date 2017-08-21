@@ -5,6 +5,7 @@ word_to_idx.csv
 *.vocab
 stat.py
 test*
+**/.vscode
 **/sweep-*
 **/data
 models

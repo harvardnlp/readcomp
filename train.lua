@@ -5,6 +5,7 @@ require 'nngraph'
 require 'SeqBRNNP'
 require 'MaskZeroSeqBRNNFinal'
 require 'CAddTableBroadcast'
+require 'MakeValuesZero'
 require 'optim'
 
 require 'crf/Util.lua'
@@ -47,6 +48,7 @@ cmd:option('--hiddensize', '{128}', 'number of hidden units used at output of ea
 cmd:option('--rnntype', 'gru', 'type of rnn to use for encoding context and query, acceptable values: rnn/lstm')
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
 cmd:option('--dropout', 0.1, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
+cmd:option('--corefscalar', 1, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
 cmd:option('--datafile', 'lambada.hdf5', 'the preprocessed hdf5 data file')
 cmd:option('--testmodel', '', 'the saved model to test')
@@ -258,6 +260,8 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
   end
 
   if opt.cuda then
+    context      = context:cuda()
+    context_post = context_post:cuda()
     context_extr = context_extr:cuda()
   end
 
@@ -362,6 +366,27 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   collect_track_garbage()
 end
 
+function build_coref(in_size, in_post_size)
+
+  local coref = nn.Sequential():add(nn.SelectTable(1)):add(nn.MakeValuesZero(post_coref))
+
+  lookup_coref_text = nn.LookupTableMaskZero(vocab_size, in_size)
+  lookup_coref_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
+
+  lookup_coref_text.maxnormout = -1 -- prevent weird maxnormout behaviour
+  lookup_coref_post.maxnormout = -1
+
+  coref:add(nn.ParallelTable():add(lookup_coref_text):add(lookup_coref_post))
+       :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
+       :add(nn.Transpose({1,2}))
+       :add(nn.ConcatTable():add(nn.Identity()):add(nn.Transpose({2,3})))
+       :add(nn.MM())
+       :add(nn.Threshold(0, -math.huge))
+       :add(nn.Sigmoid()) -- batch x seqlen x seqlen
+
+  return coref
+end
+
 function build_doc_rnn(use_lookup, in_size, in_post_size)
   local doc_rnn = nn.Sequential()
 
@@ -403,76 +428,27 @@ function build_doc_rnn(use_lookup, in_size, in_post_size)
   return doc_rnn
 end
 
-function build_query_rnn(use_lookup, in_size)
-  -- for query
-  local lm_query_forward  = nn.Sequential()
-  if use_lookup then
-    local lookup_query_forward = lookup:clone('weight', 'gradWeight')
-    lm_query_forward:add(lookup_query_forward) -- input is seqlen x batchsize
-    if opt.dropout > 0 then
-        lm_query_forward:add(nn.Dropout(opt.dropout))
-    end
-  end
-
-  local lm_query_backward = nn.Sequential()
-  if use_lookup then
-    local lookup_query_backward = lookup:clone('weight', 'gradWeight')
-    lm_query_backward:add(lookup_query_backward) -- input is seqlen x batchsize
-    if opt.dropout > 0 then
-        lm_query_backward:add(nn.Dropout(opt.dropout))
-    end
-  end
-
-  for i,hiddensize in ipairs(opt.hiddensize) do
-
-    if opt.rnntype == 'gru' then
-      local rnn_forward =  nn.SeqGRU(in_size, hiddensize)
-      rnn_forward.maskzero = true
-      lm_query_forward:add(rnn_forward)
-
-      local rnn_backward =  opt.projsize < 1 and nn.SeqGRU(in_size, hiddensize)
-      rnn_backward.maskzero = true
-      lm_query_backward:add(rnn_backward)
-    else
-      local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
-      rnn_forward.maskzero = true
-      lm_query_forward:add(rnn_forward)
-
-      local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
-      rnn_backward.maskzero = true
-      lm_query_backward:add(rnn_backward)
-    end
-    if opt.dropout > 0 then
-      lm_query_forward:add(nn.Dropout(opt.dropout))
-      lm_query_backward:add(nn.Dropout(opt.dropout))
-    end
-
-    in_size = hiddensize
-  end
-
-  lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
-  lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
-
-  return nn.Sequential()
-    :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
-    :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
-    :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
-end
-
 function build_model()
 
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize)
     U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
+    Coref = build_coref(opt.inputsize, opt.postsize)
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
 
     nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
     nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
+    nng_Coref = Coref(x_inp):annotate({name = 'coref', description = 'coref layer'})
 
-    Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
-    nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-    lm = nn.gModule({x_inp}, {nng_YdU})
+    nng_YdU = nn.MM()({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
+    
+    nng_YdUCoref = nn.MM()({nng_Coref, nng_YdU}):annotate({name = 'yducoref', description = 'coref memory'})
+    nng_YdUCorefScaled = nn.MulConstant(opt.corefscalar)(nng_YdUCoref):annotate({name = 'nng_YdUCorefScaled', description = 'coref memory'})
+    nng_Final = nn.Sequential():add(nn.CAddTable()):add(nn.Squeeze())({nng_YdU, nng_YdUCorefScaled}):annotate({name = 'final', description = 'final'})
+
+    lm = nn.gModule({x_inp}, {nng_Final})
+    -- lm = nn.gModule({x_inp}, {nng_Coref})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
@@ -488,8 +464,14 @@ function build_model()
     -- IMPORTANT: must do this after random param initialization
     if data.word_embeddings then
       local pretrained_vocab_size = data.word_embeddings:size(1)
-      print('Using pre-trained Glove word embeddings')
-      lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
+      if lookup_text then
+        print('Using pre-trained Glove word embeddings')
+        lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
+      end
+      if lookup_coref_text then
+        print('Using pre-trained Glove word embeddings')
+        lookup_coref_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
+      end
     end
 
     attention_layer = nn.SoftMax() -- to be applied with some mask
@@ -569,6 +551,14 @@ function train(params, grad_params, epoch)
 
       -- forward
       local outputs_pre = lm:forward(inputs)
+      -- print('outputs_pre')
+      -- print('outputs_pre: min = ' .. outputs_pre:min() .. 
+      --   ', max = ' .. outputs_pre:max() .. 
+      --   ', mean = ' .. outputs_pre:mean() .. 
+      --   ', std = ' .. outputs_pre:std() .. 
+      --   ', nnz = ' .. outputs_pre[outputs_pre:ne(0)]:size(1) .. ' / ' ..  outputs_pre:numel() .. ' ..........')
+
+
       local outputs = mask_attention(inputs[1][1], outputs_pre)
 
       if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
@@ -819,6 +809,12 @@ stopwords = tds.hash()
 for i = 1, data.stopwords:size(1) do
   stopwords[data.stopwords[i]] = 1
 end
+
+post_coref = tds.hash()
+for i = 1, data.post_coref:size(1) do
+  post_coref[data.post_coref[i]] = 1
+end
+
 
 vocab_size = data.vocab_size[1]
 post_vocab_size = data.post_vocab_size[1]
