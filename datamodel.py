@@ -219,12 +219,13 @@ class Corpus(object):
         answer = words[num_words - 1]
         self.dictionary.add_word(answer) # make sure the answer is in vocab
 
-        if training:
-          if answer in self.dictionary.punc2idx or answer in self.dictionary.stop2idx:
-            puncstop_answer_count += 1
+        if answer in self.dictionary.punc2idx or answer in self.dictionary.stop2idx:
+          puncstop_answer_count += 1
+          if training:
             print_msg(u'INFO: SKIPPING... Target-Answer is either a stop word or punctuation, line = {}'.format(line), 2, self.args_verbose_level)
             continue
 
+        if training:
           if re.search('[a-z]', answer) == None:
             print_msg(u'INFO: SKIPPING... Target-Answer is not valid, line = {}'.format(line), 2, self.args_verbose_level)
             continue
