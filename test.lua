@@ -9,8 +9,7 @@ require 'SinusoidPositionEncoding'
 require 'MultiHeadAttention'
 require 'PositionWiseFFNN'
 require 'LayerNorm'
-require 'MakeValuesZero'
-local tds = require 'tds'
+
 
 cmd = torch.CmdLine()
 cmd:text()
@@ -309,29 +308,6 @@ function nntest.LayerNorm()
   end
 end
 
-function nntest.MakeValuesZero()
-  local ntests = 5
-  local max_dim1 = 8
-  local max_dim2 = 16
-
-  local values1 = tds.hash()
-  values1[3] = 1
-
-  local values2 = tds.hash()
-  values2[15] = 1
-  values2[2] = 1
-  values2[6] = 1
-
-  local x1 = torch.LongTensor({ {1, 2, 3}, {4, 5, 6} })
-  local x2 = torch.LongTensor({ {15, 2, 1}, {4, 5, 6} })
-
-  local module = nn.MakeValuesZero(values1, values2)
-  local y = module:forward({x1, x2})
-
-  mytester:assertlt(y[1]:ne(torch.LongTensor({{1, 2, 3}, {0, 0, 6}})):sum(), precision, 'error ')
-  mytester:assertlt(y[2]:ne(torch.LongTensor({{15, 2, 1}, {0, 0, 6}})):sum(), precision, 'error ')
-end
-
 mytester:add(nntest)
 
 jac = nn.Jacobian
@@ -352,14 +328,13 @@ function nn.test(tests, seed)
 end
 
 nn.test{
-  -- 'ShiftRight',
-  -- 'KMaxFilter', 
-  -- 'MakeDiagonalZero', 
-  -- 'MaskZeroSeqBRNNFinal', 
-  -- 'MaxNodeMarginal', 
-  -- 'SinusoidPositionEncoding', 
-  -- 'MultiHeadAttention', 
-  -- 'LayerNorm', 
-  -- 'PositionWiseFFNN',
-  'MakeValuesZero'
+  'ShiftRight',
+  'KMaxFilter', 
+  'MakeDiagonalZero', 
+  'MaskZeroSeqBRNNFinal', 
+  'MaxNodeMarginal', 
+  'SinusoidPositionEncoding', 
+  'MultiHeadAttention', 
+  'LayerNorm', 
+  'PositionWiseFFNN'
 }

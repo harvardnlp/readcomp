@@ -213,8 +213,6 @@ def main(arguments):
       f['stopwords']        = np.array(corpus.stopwords) # punctuations are ignored during test time
       f['vocab_size']       = np.array([len(corpus.dictionary)])
       f['post_vocab_size']  = np.array([len(corpus.dictionary.post2idx)])
-      f['post_coref']       = np.array([corpus.dictionary.post2idx[tag] for tag in ["NN", "NNP", "NNS", "NNPS"]])
-      f['text_coref']       = np.array([corpus.dictionary.word2idx[tok] for tok in datamodel.pronouns])
 
       f['train_data']       = np.array(corpus.train['data'])
       f['train_post']       = np.array(corpus.train['post'])
