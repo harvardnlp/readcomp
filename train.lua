@@ -5,6 +5,7 @@ require 'nngraph'
 require 'SeqBRNNP'
 require 'MaskZeroSeqBRNNFinal'
 require 'CAddTableBroadcast'
+require 'SinusoidPositionEncoding'
 require 'MakeValuesZero'
 require 'optim'
 
@@ -379,6 +380,7 @@ function build_coref(in_size, in_post_size)
   coref:add(nn.ParallelTable():add(lookup_coref_text):add(lookup_coref_post))
        :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
        :add(nn.Transpose({1,2}))
+       :add(nn.SinusoidPositionEncoding(opt.maxseqlen, in_size + in_post_size))
        :add(nn.ConcatTable():add(nn.Identity()):add(nn.Transpose({2,3})))
        :add(nn.MM())
        :add(nn.Threshold(0, -math.huge))
