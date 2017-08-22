@@ -266,20 +266,21 @@ function loadData(tensor_data, tensor_post, tensor_extr, tensor_location, eval_h
 end
 
 function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tensor_extr, tensor_location)
-  local metadata
-  local batch_size = opt.batchsize
-  local model = lm
-  local model_file = saved_model_file and saved_model_file or paths.concat(opt.savepath, opt.id..'.t7')
+  if not model then
+    batch_size = opt.batchsize
+    model = lm
+    model_file = saved_model_file and saved_model_file or paths.concat(opt.savepath, opt.id..'.t7')
 
-  if not lm then
-    -- load model for computing accuracy & perplexity for target answers
-    metadata = torch.load(model_file)
-    batch_size = metadata.opt.batchsize
-    model = metadata.model
-    puncs = metadata.puncs -- punctuations
-    attention_layer = nn.SoftMax()
-    if opt.cuda then
-      attention_layer:cuda()
+    if not lm then
+      -- load model for computing accuracy & perplexity for target answers
+      metadata = torch.load(model_file)
+      batch_size = metadata.opt.batchsize
+      model = metadata.model
+      puncs = metadata.puncs -- punctuations
+      attention_layer = nn.SoftMax()
+      if opt.cuda then
+        attention_layer:cuda()
+      end
     end
   end
 
@@ -296,6 +297,9 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   local ntestbatches = all_batches:size(1)
 
   local correct = 0
+  local correct_top2 = 0
+  local correct_top3 = 0
+  local correct_top5 = 0
   local num_examples = 0
   for i = 1, ntestbatches do
     local tests_con, tests_ans, tests_ans_ind = loadData(tensor_data, tensor_post, tensor_extr, tensor_location, false, all_batches[i])
@@ -329,6 +333,25 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
         if max_word == answer[b] then
           correct = correct + 1
         end
+        local answer_rank = 1
+        if word_to_prob[answer[b]] == nil then
+          answer_rank = math.huge
+        else
+          for w,p in pairs(word_to_prob) do
+            if w ~= answer[b] and p > word_to_prob[answer[b]] then
+              answer_rank = answer_rank + 1
+            end
+          end
+        end
+        if answer_rank <= 2 then
+          correct_top2 = correct_top2 + 1
+        end
+        if answer_rank <= 3 then
+          correct_top3 = correct_top3 + 1
+        end
+        if answer_rank <= 5 then
+          correct_top5 = correct_top5 + 1
+        end
         num_examples = num_examples + 1
 
         predictions[b] = max_word
@@ -357,7 +380,13 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   end
 
   local accuracy = correct / num_examples
+  local accuracy_top3 = correct_top3 / num_examples
+  local accuracy_top2 = correct_top2 / num_examples
+  local accuracy_top5 = correct_top5 / num_examples
   print('Test Accuracy = '..accuracy..' ('..correct..' out of '..num_examples..')')
+  print('Test Accuracy Top 2 = '..accuracy_top2..' ('..correct_top2..' out of '..num_examples..')')
+  print('Test Accuracy Top 3 = '..accuracy_top3..' ('..correct_top3..' out of '..num_examples..')')
+  print('Test Accuracy Top 5 = '..accuracy_top5..' ('..correct_top5..' out of '..num_examples..')')
 
   collect_track_garbage()
 end
@@ -788,7 +817,7 @@ function validate(ntrial, epoch)
 
   -- early-stopping
   if validloss < xplog.minvalloss then
-
+    test_model()
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch 
@@ -882,8 +911,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("Epoch #"..epoch.." :")
 
   train(params, grad_params, epoch)
-  -- validate(ntrial, epoch)
-  test_model()
+  validate(ntrial, epoch)
 
 
   epoch = epoch + 1
