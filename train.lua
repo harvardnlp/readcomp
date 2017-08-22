@@ -778,7 +778,7 @@ function validate(ntrial, epoch)
 
   -- early-stopping
   if validloss < xplog.minvalloss then
-
+    test_model()
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch 
@@ -878,9 +878,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("Epoch #"..epoch.." :")
 
   train(params, grad_params, epoch)
-  -- validate(ntrial, epoch)
-  test_model()
-
+  validate(ntrial, epoch)
 
   epoch = epoch + 1
 end
