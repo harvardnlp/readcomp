@@ -301,6 +301,9 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   local ntestbatches = all_batches:size(1)
 
   local correct = 0
+  local correct_top2 = 0
+  local correct_top3 = 0
+  local correct_top5 = 0
   local num_examples = 0
   for i = 1, ntestbatches do
     local tests_con, tests_ans, tests_ans_ind = loadData(tensor_data, tensor_post, tensor_extr, tensor_location, false, all_batches[i])
@@ -334,6 +337,21 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
         if max_word == answer[b] then
           correct = correct + 1
         end
+        local answer_rank = 1
+        for w,p in pairs(word_to_prob) do
+          if w ~= answer[b] and p > word_to_prob[answer[b]] then
+            answer_rank = answer_rank + 1
+          end
+        end
+        if answer_rank <= 2 then
+          correct_top2 = correct_top2 + 1
+        end
+        if answer_rank <= 3 then
+          correct_top3 = correct_top3 + 1
+        end
+        if answer_rank <= 5 then
+          correct_top5 = correct_top5 + 1
+        end
         num_examples = num_examples + 1
 
         predictions[b] = max_word
@@ -361,15 +379,21 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     end
   end
 
-  local accuracy = correct / num_examples
+  local accuracy      = correct      / num_examples
+  local accuracy_top2 = correct_top2 / num_examples
+  local accuracy_top3 = correct_top3 / num_examples
+  local accuracy_top5 = correct_top5 / num_examples
   print('Test Accuracy = '..accuracy..' ('..correct..' out of '..num_examples..')')
+  print('Test Accuracy Top 2 = '..accuracy_top2..' ('..correct_top2..' out of '..num_examples..')')
+  print('Test Accuracy Top 3 = '..accuracy_top3..' ('..correct_top3..' out of '..num_examples..')')
+  print('Test Accuracy Top 5 = '..accuracy_top5..' ('..correct_top5..' out of '..num_examples..')')
 
   collect_track_garbage()
 end
 
 function build_coref(in_size, in_post_size)
 
-  local coref = nn.Sequential():add(nn.SelectTable(1)):add(nn.MakeValuesZero(post_coref))
+  local coref = nn.Sequential():add(nn.SelectTable(1)):add(nn.MakeValuesZero(text_coref, post_coref))
 
   lookup_coref_text = nn.LookupTableMaskZero(vocab_size, in_size)
   lookup_coref_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
@@ -381,7 +405,7 @@ function build_coref(in_size, in_post_size)
        :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
        :add(nn.Transpose({1,2}))
        :add(nn.SinusoidPositionEncoding(opt.maxseqlen, in_size + in_post_size))
-       :add(nn.ConcatTable():add(nn.Identity()):add(nn.Transpose({2,3})))
+       :add(nn.ConcatTable():add(nn.Bottle(nn.Linear(in_size + in_post_size, in_size + in_post_size))):add(nn.Transpose({2,3})))
        :add(nn.MM())
        :add(nn.Threshold(0, -math.huge))
        :add(nn.Sigmoid()) -- batch x seqlen x seqlen
@@ -817,6 +841,10 @@ for i = 1, data.post_coref:size(1) do
   post_coref[data.post_coref[i]] = 1
 end
 
+text_coref = tds.hash()
+for i = 1, data.text_coref:size(1) do
+  text_coref[data.text_coref[i]] = 1
+end
 
 vocab_size = data.vocab_size[1]
 post_vocab_size = data.post_vocab_size[1]

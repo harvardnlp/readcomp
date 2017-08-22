@@ -8,6 +8,16 @@ UNKNOWN = '<unk>'
 GLOVE_DIM = 100
 SEPARATOR = '<sep>'
 end_words  = { "?", "??", "???", "!", "!!", "!!!", ".", "?!", "!?" }
+pronouns = {
+  "hers": "PRPFEM", "herself": "PRPFEM", "she": "PRPFEM", "her": "PRPFEM",
+  "him": "PRPMAL", "himself": "PRPMAL", "hisself": "PRPMAL", "his": "PRPMAL",
+  "it": "PRPIT", "itself": "PRPIT", "its": "PRPIT",
+  "me": "PRPSEL", "myself": "PRPSEL", "self": "PRPSEL", "mine": "PRPSEL", "my": "PRPSEL", "ownself": "PRPSEL",
+  "one": "PRPONE", "oneself": "PRPONE",
+  "ours": "PRPOUR", "ourselves": "PRPOUR", "us": "PRPOUR", "our": "PRPOUR", "ours": "PRPOUR",
+  "thee": "PRPYOU", "thou": "PRPYOU", "thy": "PRPYOU", "your": "PRPYOU", "yours": "PRPYOU", "you" : "PRPYOU",
+  "theirs": "PRPTHY", "them": "PRPTHY", "themselves": "PRPTHY", "they": "PRPTHY", "their": "PRPTHY"
+}
 
 def print_msg(message, verbose_level, args_verbose_level):
   if args_verbose_level >= verbose_level:
@@ -133,6 +143,9 @@ class Corpus(object):
           for line in f:
             self.dictionary.add_word(line.strip())
 
+      for p in pronouns:
+        self.dictionary.add_word(p)
+
       print 'Vocab size = {}'.format(len(self.dictionary), 1, self.args_verbose_level)
 
 
@@ -214,7 +227,7 @@ class Corpus(object):
           words.pop(target_answer_separator_index)
 
         num_words = len(words)
-        pos_tags = [t[1] for t in nltk.pos_tag(words)]
+        pos_tags = [pronouns[t[0]] if t[0] in pronouns else t[1] for t in nltk.pos_tag(words)]
 
         answer = words[num_words - 1]
         self.dictionary.add_word(answer) # make sure the answer is in vocab
@@ -255,9 +268,7 @@ class Corpus(object):
             extr_word_freq[word] += 1
 
           data['data'].append(self.dictionary.word2idx[word])
-
-          pos_tag = pos_tags[i]
-          data['post'].append(self.dictionary.add_pos_tag(pos_tag))
+          data['post'].append(self.dictionary.add_pos_tag(pos_tags[i]))
 
           self.dictionary.update_count(word)
 
