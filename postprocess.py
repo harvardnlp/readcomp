@@ -29,7 +29,6 @@ def compute_accuracy(args):
   for filename in glob.glob(args.model_dump_pattern):
     with h5py.File(filename, "r") as f:
       inputs      = np.array(f['inputs'],      dtype=int)
-      targets     = np.array(f['targets'],     dtype=int)
       outputs     = np.array(f['outputs'],     dtype=float)
       predictions = np.array(f['predictions'], dtype=int)
       answers     = np.array(f['answers'],     dtype=int)
@@ -116,7 +115,6 @@ def main(arguments):
 
     with h5py.File(filename, "r") as f:
       inputs      = np.array(f['inputs'],      dtype=int)
-      targets     = np.array(f['targets'],     dtype=int)
       outputs     = np.array(f['outputs'],     dtype=float)
       predictions = np.array(f['predictions'], dtype=int)
       answers     = np.array(f['answers'],     dtype=int)
@@ -170,9 +168,8 @@ def main(arguments):
           sns.heatmap(op[b].reshape((dim1,dim2)), annot=labels[b].reshape((dim1,dim2)), fmt='', cmap='Blues', ax = ax)
           answer_indicator = r"$\bf{CORRECT}$" if answers[b] == predictions[b] else "Correct"
           answer_indicator = answer_indicator + ' (in context)' if answers[b] in ip[b] else answer_indicator
-          target_sentence = ' '.join([idx2word[idx] if idx != 0 else '' for idx in targets[:,b]]).strip()
 
-          title_text = '{} = {}, Prediction = {}\nTarget = {}'.format(answer_indicator, idx2word[answers[b]], idx2word[predictions[b]], target_sentence)
+          title_text = '{} = {}, Prediction = {}'.format(answer_indicator, idx2word[answers[b]], idx2word[predictions[b]])
           if len(analysis_result) > 0:
               title_text += '\nExample Types:{{ {} }}'.format(analysis_result)
           ax.set_title(title_text)
