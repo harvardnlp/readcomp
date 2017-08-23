@@ -176,7 +176,7 @@ def main(arguments):
                       help='separator token between context, query and answer, for CNN dataset use $$$')
   parser.add_argument('--answer_identifier', type=str, default='',
                       help='identifier for answer token in the query, for CNN dataset this is @placeholder')
-  parser.add_argument('--out_file', type=str, default='lambada-asr.hdf5',
+  parser.add_argument('--out_file', type=str, default='lambada.hdf5',
                       help='output hdf5 file')
   parser.add_argument('--debug_translate', type=str, default='',
                       help='translate the preprocessed .hdf5 back into words, or "manual" to translate manual input')

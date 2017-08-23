@@ -19,6 +19,9 @@ import matplotlib.pyplot as plt
 import datamodel
 from pylab import savefig
 
+sys.stdout = codecs.getwriter('utf8')(sys.stdout)
+sys.stderr = codecs.getwriter('utf8')(sys.stderr)
+
 args = {}
 
 
@@ -52,10 +55,16 @@ def main(arguments):
                       help='file pattern of model dumps for analysis')
   parser.add_argument('--analysis_category_file', type=str, default='',
                       help='absolute path of analysis-category file')
-  parser.add_argument('--out_vocab_file_prefix', type=str, default='lambada',
+  parser.add_argument('--vocab_file_prefix', type=str, default='lambada',
                       help='file name prefix of vocab files')
+  parser.add_argument('--out_debug_file', type=str, default='debug.tsv',
+                      help='create tsv debug files with answer rank, answer, prediction, and link to image')
   parser.add_argument('--in_context_only', action='store_true',
                       help='whether to process only instances where answer is in context')
+  parser.add_argument('--incorrect_only', action='store_true',
+                      help='whether to process only instances where answer is incorrect')
+  parser.add_argument('--answer_rank', type=int, default=0,
+                      help='only process instances where the answer is ranked at the specified number, 0 to print all')
   parser.add_argument('--verbose_level', type=int, default=2,
                       help='level of verbosity, ranging from 0 to 2, default = 2')
 
@@ -68,7 +77,7 @@ def main(arguments):
   compute_accuracy(args)
 
   corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None)
-  corpus.load_vocab(args.out_vocab_file_prefix)
+  corpus.load_vocab(args.vocab_file_prefix)
   idx2word = corpus.dictionary.idx2word
   word2idx = corpus.dictionary.word2idx
 
@@ -109,6 +118,9 @@ def main(arguments):
         assert np.sum(category_labels[categories[i]]) == counts[i], 'category count mismatch for category {}'.format(categories[i])
 
 
+  if len(args.out_debug_file):
+    debug_file = codecs.open(args.out_debug_file, 'w', encoding='utf8')
+    debug_file.write('ImageFile\tAnswer Rank\tAnswer\tPrediction\n')
 
   for filename in sorted(glob.glob(args.model_dump_pattern), reverse = True): # work on shorter examples first
     print 'Processing {}'.format(filename)
@@ -140,6 +152,32 @@ def main(arguments):
           if args.in_context_only and answers[b] not in ip[b]:
             continue
 
+          if args.incorrect_only and answers[b] == predictions[b]:
+            continue
+
+          image_file = os.path.abspath(filename) + '.ex{}.png'.format(str(b).zfill(3))
+
+          if args.in_context_only:
+            word_to_prob = {}
+            for w in range(ip.shape[1]):
+              word = ip[b][w]
+              if word != 0:
+                if word not in word_to_prob:
+                  word_to_prob[word] = 0
+                word_to_prob[word] += op[b][w]
+
+            answer_rank = 1
+            for word in word_to_prob:
+              if word != answers[b] and word_to_prob[word] > word_to_prob[answers[b]]:
+                answer_rank += 1
+
+            if args.answer_rank > 0 and answer_rank != args.answer_rank:
+              continue
+
+            if debug_file:
+              debug_file.write(u'=hyperlink("{}")\t{}\t{}\t{}\n'.format(
+                image_file, answer_rank, idx2word[answers[b]], idx2word[predictions[b]]))
+            
           analysis_result = ''
           if len(category_labels) > 0: # if there is analysis result for this file
 
@@ -175,12 +213,15 @@ def main(arguments):
           ax.set_title(title_text)
 
           # plt.show()
-          savefig(filename + '.ex{}.png'.format(str(b).zfill(3)), bbox_inches='tight', dpi = 100)
+          savefig(image_file, bbox_inches='tight', dpi = 100)
           plt.clf()
 
   for cat in category_labels:
     print('Category: {}, Accuracy = {}% ({} out of {})'.format(
       cat, analysis_category_correct[cat] * 100.0 / analysis_category_count[cat], analysis_category_correct[cat], analysis_category_count[cat]))
+
+  if len(args.out_debug_file):
+    debug_file.close()
 
 if __name__ == '__main__':
     sys.exit(main(sys.argv[1:]))
