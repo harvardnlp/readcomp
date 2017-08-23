@@ -300,6 +300,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   local correct_top2 = 0
   local correct_top3 = 0
   local correct_top5 = 0
+  local scorek = {}
   local num_examples = 0
   for i = 1, ntestbatches do
     local tests_con, tests_ans, tests_ans_ind = loadData(tensor_data, tensor_post, tensor_extr, tensor_location, false, all_batches[i])
@@ -351,6 +352,12 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
         end
         if answer_rank <= 5 then
           correct_top5 = correct_top5 + 1
+          if scorek[answer_rank] == nil then
+            scorek[answer_rank] = {}
+            scorek[100 + answer_rank] = {}
+          end
+          scorek[answer_rank][#scorek[answer_rank] + 1] = word_to_prob[answer[b]]
+          scorek[100 + answer_rank][#scorek[100 + answer_rank] + 1] = max_prob - word_to_prob[answer[b]]
         end
         num_examples = num_examples + 1
 
@@ -387,6 +394,11 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   print('Test Accuracy Top 2 = '..accuracy_top2..' ('..correct_top2..' out of '..num_examples..')')
   print('Test Accuracy Top 3 = '..accuracy_top3..' ('..correct_top3..' out of '..num_examples..')')
   print('Test Accuracy Top 5 = '..accuracy_top5..' ('..correct_top5..' out of '..num_examples..')')
+
+  for k,tablek in pairs(scorek) do
+    local tensork = torch.DoubleTensor(tablek)
+    print('Rank ' .. k .. ' - mean = ' .. tensork:mean() .. ', min = ' .. tensork:min() .. ', max = ' .. tensork:max() .. ', std = ' .. tensork:std() .. ', count = ' .. tensork:size(1))
+  end
 
   collect_track_garbage()
 end
