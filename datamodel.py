@@ -77,6 +77,8 @@ class Corpus(object):
     self.args_verbose_level = args_verbose_level
     self.context_target_separator = context_target_separator # special separator token to identify context and target
     self.answer_identifier = answer_identifier
+    self.max_sentence_number = 0
+    self.max_speech_number = 0
     self.dictify(vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file)
 
 
@@ -172,6 +174,8 @@ class Corpus(object):
     data = { 
       'data': [], # token ids for each word in the corpus 
       'post': [], # pos tags 
+      'sentence': [], # sentence numbers 
+      'speech': [], # speech numbers 
       'extr': [], # extra features, such as frequency of token in the context, whether previous bi-gram of token match with that of the answer etc...
       'offsets': [], # offset locations for each line in the final 1-d data array 
       'context_length': [], # count of words in the context
@@ -179,7 +183,7 @@ class Corpus(object):
 
     self.tokenize_file(path, data, training)
 
-    sorted_data = { 'data': data['data'], 'post': data['post'], 'extr': data['extr'] }
+    sorted_data = { 'data': data['data'], 'post': data['post'], 'sentence': data['sentence'], 'speech': data['speech'], 'extr': data['extr'] }
 
     loc = np.array([np.array(data['offsets']), np.array(data['context_length'])]).T
     loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
@@ -244,6 +248,9 @@ class Corpus(object):
 
         words = [word if word in self.dictionary.word2idx else UNKNOWN for word in words]
 
+        sentence_number = 1
+        speech_number = 1 # if not in speech/conversation use 1
+        in_speech = False
         extr_word_freq = {}
         for i in range(len(words)):
           word = words[i]
@@ -259,10 +266,23 @@ class Corpus(object):
 
           pos_tag = pos_tags[i]
           data['post'].append(self.dictionary.add_pos_tag(pos_tag))
+          data['sentence'].append(sentence_number)
+          data['speech'].append(speech_number if in_speech else 1)
+
+          if word == '.' or (word =="''" and i > 0 and words[i - 1] == '.'):
+            sentence_number += 1
+
+          if word == "``":
+            in_speech = True
+            speech_number += 1
+          elif word == "''":
+            in_speech = False
 
           self.dictionary.update_count(word)
 
-        sentence_number = 1
+        self.max_sentence_number = max(self.max_sentence_number, sentence_number)
+        self.max_speech_number = max(self.max_speech_number, speech_number)
+        
         for i in range(len(words)):
           word = words[i]
 
@@ -305,12 +325,8 @@ class Corpus(object):
 
           extra_features.append(freq)
           extra_features.append(bigram_match)
-          extra_features.append(sentence_number / 10.0)
 
           data['extr'].append(np.array(extra_features))
-
-          if word == '.' or (word =="''" and i > 0 and words[i - 1] == '.'):
-            sentence_number += 1
 
         print_msg('Processed {} lines'.format(num_lines_in_file), 3, self.args_verbose_level)
 

@@ -213,29 +213,41 @@ def main(arguments):
       f['stopwords']        = np.array(corpus.stopwords) # punctuations are ignored during test time
       f['vocab_size']       = np.array([len(corpus.dictionary)])
       f['post_vocab_size']  = np.array([len(corpus.dictionary.post2idx)])
+      f['sent_vocab_size']  = np.array([corpus.max_sentence_number])
+      f['spee_vocab_size']  = np.array([corpus.max_speech_number])
 
       f['train_data']       = np.array(corpus.train['data'])
       f['train_post']       = np.array(corpus.train['post'])
+      f['train_sentence']   = np.array(corpus.train['sentence'])
+      f['train_speech']     = np.array(corpus.train['speech'])
       f['train_extr']       = np.array(corpus.train['extr'])
       f['train_location']   = np.array(corpus.train['location'])
 
       f['valid_data']       = np.array(corpus.valid['data'])
       f['valid_post']       = np.array(corpus.valid['post'])
+      f['valid_sentence']   = np.array(corpus.valid['sentence'])
+      f['valid_speech']     = np.array(corpus.valid['speech'])
       f['valid_extr']       = np.array(corpus.valid['extr'])
       f['valid_location']   = np.array(corpus.valid['location'])
 
       f['test_data']        = np.array(corpus.test['data'])
       f['test_post']        = np.array(corpus.test['post'])
+      f['test_sentence']    = np.array(corpus.test['sentence'])
+      f['test_speech']      = np.array(corpus.test['speech'])
       f['test_extr']        = np.array(corpus.test['extr'])
       f['test_location']    = np.array(corpus.test['location'])
 
       f['control_data']     = np.array(corpus.control['data'])
       f['control_post']     = np.array(corpus.control['post'])
+      f['control_sentence'] = np.array(corpus.control['sentence'])
+      f['control_speech']   = np.array(corpus.control['speech'])
       f['control_extr']     = np.array(corpus.control['extr'])
       f['control_location'] = np.array(corpus.control['location'])
 
       f['analysis_data']     = np.array(corpus.analysis['data'])
       f['analysis_post']     = np.array(corpus.analysis['post'])
+      f['analysis_sentence'] = np.array(corpus.analysis['sentence'])
+      f['analysis_speech']   = np.array(corpus.analysis['speech'])
       f['analysis_extr']     = np.array(corpus.analysis['extr'])
       f['analysis_location'] = np.array(corpus.analysis['location'])
 
