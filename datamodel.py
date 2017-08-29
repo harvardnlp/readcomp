@@ -262,9 +262,10 @@ class Corpus(object):
 
           self.dictionary.update_count(word)
 
-        
+        sentence_number = 1
         for i in range(len(words)):
           word = words[i]
+
           extra_features = []
 
           freq = float(extr_word_freq[word]) / len(words)
@@ -304,8 +305,12 @@ class Corpus(object):
 
           extra_features.append(freq)
           extra_features.append(bigram_match)
+          extra_features.append(sentence_number / 10.0)
 
           data['extr'].append(np.array(extra_features))
+
+          if word == '.' or (word =="''" and i > 0 and words[i - 1] == '.'):
+            sentence_number += 1
 
         print_msg('Processed {} lines'.format(num_lines_in_file), 3, self.args_verbose_level)
 
