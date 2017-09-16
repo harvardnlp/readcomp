@@ -25,14 +25,14 @@ sys.stderr = codecs.getwriter('utf8')(sys.stderr)
 args = {}
 
 
-def compute_accuracy(args):
+def compute_accuracy(dump_file_pattern, ensemble, ensemble_type):
   total = 0
   total_context = 0 # answer is in context
   correct = 0
   processed_batches = {}
-  for filename in glob.glob(args.model_dump_pattern):
-    if args.ensemble:
-      inputs, outputs, predictions, answers, filename, batch_id = load_ensemble(filename, args.ensemble_type)
+  for filename in glob.glob(dump_file_pattern):
+    if ensemble:
+      inputs, outputs, predictions, answers, filename, batch_id = load_ensemble(filename, ensemble_type)
       if batch_id in processed_batches:
         continue
       else:
@@ -44,7 +44,7 @@ def compute_accuracy(args):
         predictions = np.array(f['predictions'], dtype=int)
         answers     = np.array(f['answers'],     dtype=int)
 
-    batch_size, max_len = outputs.shape
+    batch_size, max_len = inputs.shape
     answer_index = answers > 0
     total += np.sum(answer_index)
     total_context += np.sum([1 if answers[b] > 0 and answers[b] in inputs[b] else 0 for b in range(batch_size)])
@@ -56,10 +56,9 @@ def compute_accuracy(args):
 
 def max_attention_sum(ip, op):
   max_words = np.zeros(op.shape[0], dtype=int)
-  word_to_prob = {}
-  max_prob = 0
-
   for b in range(op.shape[0]):
+    word_to_prob = {}
+    max_prob = 0
     for w in range(op.shape[1]):
       word = ip[b][w]
       if word != 0:
@@ -73,11 +72,11 @@ def max_attention_sum(ip, op):
   return max_words
 
 
-def load_ensemble(filename, vote_type):
+def load_ensemble(filename, ensemble_type):
   file_info = re.match('(.*)\.t7\.test\.(.*)\.dump', os.path.basename(filename))
   model_id = file_info.group(1)
   batch_id = file_info.group(2)
-  ensemble_pattern = os.path.join(os.path.dirname(filename), '*.t7.test.{}.dump'.format(batch_id))
+  ensemble_batch_pattern = os.path.join(os.path.dirname(filename), '*.t7.test.{}.dump'.format(batch_id))
   filename = os.path.join(os.path.dirname(filename), 'ensemble.t7.test.{}.dump'.format(batch_id))
 
   inputs      = None
@@ -86,7 +85,7 @@ def load_ensemble(filename, vote_type):
   prediction_table = {}
 
   num_files = 0
-  for filebatch in glob.glob(ensemble_pattern):
+  for filebatch in glob.glob(ensemble_batch_pattern):
     num_files += 1
     with h5py.File(filebatch, "r") as f:
       file_inputs                 = np.array(f['inputs'],      dtype=int).T
@@ -103,12 +102,10 @@ def load_ensemble(filename, vote_type):
   
   outputs = sum([output_table[key] for key in output_table]) / float(num_files)
 
-  if vote_type == 'avg':
+  if ensemble_type == 'avg':
     predictions = max_attention_sum(inputs, outputs)
-    print('predictions')
-    print(predictions)
 
-  elif vote_type == 'count':
+  elif ensemble_type == 'vote':
     predictions = prediction_table[1]
     for b in range(prediction_table[1].shape[0]):
       word_to_count = {}
@@ -122,10 +119,6 @@ def load_ensemble(filename, vote_type):
           if max_count < word_to_count[pred]:
             max_count = word_to_count[pred]
             predictions[b] = pred
-
-  else:
-    print('not implemented')
-    os.exit(0)
 
   return inputs, outputs, predictions, answers, filename, int(batch_id)
 
@@ -152,7 +145,7 @@ def main(arguments):
   parser.add_argument('--ensemble', action='store_true',
                       help='whether to treat dump directory as ensemble dump, i.e. containing dump files for multiple models')
   parser.add_argument('--ensemble_type', type=str, default='avg',
-                      help='type of ensemble voting, avg or count')
+                      help='type of ensemble voting, avg, vote, all')
   parser.add_argument('--verbose_level', type=int, default=2,
                       help='level of verbosity, ranging from 0 to 2, default = 2')
 
@@ -162,7 +155,22 @@ def main(arguments):
   sns.set(font_scale=2,font='serif')
   plt.figure(figsize=(60, 40), dpi=100)
 
-  compute_accuracy(args)
+  if args.ensemble and args.ensemble_type == 'all':
+    processed_models = {}
+    for filename in glob.glob(args.model_dump_pattern):
+      file_info = re.match('(.*)\.t7\.test\.(.*)\.dump', os.path.basename(filename))
+      model_id = file_info.group(1)
+      if model_id not in processed_models:
+        processed_models[model_id] = True
+      else:
+        continue
+      ensemble_model_pattern = os.path.join(os.path.dirname(filename), '{}.t7.test.*.dump'.format(model_id))
+      print '------- Model = {} -------'.format(model_id)
+      compute_accuracy(ensemble_model_pattern, False, None)
+
+    sys.exit(0)
+  else:
+    compute_accuracy(args.model_dump_pattern, args.ensemble, args.ensemble_type)
 
   corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None)
   corpus.load_vocab(args.vocab_file_prefix)
