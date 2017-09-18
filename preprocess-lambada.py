@@ -216,6 +216,9 @@ def main(arguments):
       f['sent_vocab_size']  = np.array([corpus.max_sentence_number])
       f['spee_vocab_size']  = np.array([corpus.max_speech_number])
 
+      f['def_data']         = np.array(corpus.definition['data'])
+      f['def_location']     = np.array(corpus.definition['location'])
+
       f['train_data']       = np.array(corpus.train['data'])
       f['train_post']       = np.array(corpus.train['post'])
       f['train_sentence']   = np.array(corpus.train['sentence'])

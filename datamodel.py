@@ -2,6 +2,7 @@ import numpy as np
 import codecs
 import os
 import nltk
+from nltk.corpus import wordnet as wn
 import re
 
 UNKNOWN = '<unk>'
@@ -70,6 +71,30 @@ class Dictionary(object):
       for line in posf:
         parts = line.split()
         self.post2idx[parts[0]] = int(parts[1])
+
+
+  def create_definition(self):
+    defdata = { "word": [], "def": [], "offsets": [], "length": [] }
+    
+    for word in self.word2idx:
+      defdata["word"].append(self.word2idx[word])
+      defdata["offsets"].append(len(defdata["def"]) + 1)
+
+      word_syn = wn.synsets(word)
+      if len(word_syn) > 0:
+        word_def = word_syn[0].definition()
+        word_def_tok = nltk.word_tokenize(word_def)
+        tokens = [self.word2idx[w] if w in self.word2idx else self.word2idx[UNKNOWN] for w in word_def_tok]
+        defdata["def"].extend(tokens)
+        defdata["length"].append(len(tokens))
+      else:
+        defdata["def"].append(0)
+        defdata["length"].append(1)
+
+    loc = np.array([np.array(defdata['offsets']), np.array(defdata['length']), np.array(defdata['word'])]).T
+    loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
+
+    return { 'data': defdata['def'], 'location': loc }
 
 
 class Corpus(object):
@@ -154,6 +179,8 @@ class Corpus(object):
     self.control = self.tokenize(os.path.join(path, control), training = False)
     print_msg('Loading analysis data...', 1, self.args_verbose_level)
     self.analysis = self.tokenize(os.path.join(path, analysis), training = False)
+    print_msg('Loading wordnet definition data...', 1, self.args_verbose_level)
+    self.definition = self.dictionary.create_definition()
 
     print_msg('\nTraining Data Statistics:\n', 1, self.args_verbose_level)
     train_context_length = self.train['location'][:,1]
