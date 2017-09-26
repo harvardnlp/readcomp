@@ -25,7 +25,7 @@ sys.stderr = codecs.getwriter('utf8')(sys.stderr)
 args = {}
 
 
-def compute_accuracy(dump_file_pattern, ensemble, ensemble_type):
+def compute_accuracy(dump_file_pattern, ensemble, ensemble_type, sid_tags, word2idx):
   total = 0
   total_context = 0 # answer is in context
   correct = 0
@@ -43,6 +43,32 @@ def compute_accuracy(dump_file_pattern, ensemble, ensemble_type):
         outputs     = np.array(f['outputs'],     dtype=float)
         predictions = np.array(f['predictions'], dtype=int)
         answers     = np.array(f['answers'],     dtype=int)
+        linenos     = np.array(f['lineno'],      dtype=int)
+
+        if len(sid_tags) > 0:
+          print 'reranking answers based on speaker id tags'
+          word_to_prob = get_attention_sum(inputs, outputs)
+          for b in range(linenos.shape[0]):
+            wtp = word_to_prob[b]
+            last_speaker_id_tag = sid_tags[linenos[b] - 1][-1][2]
+            found_speakers = []
+            for st in sid_tags[linenos[b] - 1]:
+              if st[1] == 'PERSON' and st[0].strip() in word2idx:
+                found_speakers.append(word2idx[st[0].strip()])
+
+            # if speaker id identified the last sentence as a speech utterance and if there
+            # are at least 2 speakers in the context then try to rerank the speakers. if
+            # there's only one person in the context then set that person to the answer if needed
+            if last_speaker_id_tag is not None and last_speaker_id_tag.strip() in word2idx:
+              last_speaker = word2idx[last_speaker_id_tag.strip()]
+              if len(found_speakers) > 1:
+                top_k_words = wtp[:5]
+                if top_k_words[0] in found_speakers and top_k_words[1] in found_speakers and last_speaker == top_k_words[0]:
+                  print 'switched answer to 2nd ranked speaker'
+                  predictions[b] = top_k_words[1]
+              elif len(found_speakers) == 1:
+                print 'set prediction to the only speaker found in context'
+                predictions[b] = found_speakers[0]
 
     batch_size, max_len = inputs.shape
     answer_index = answers > 0
@@ -54,22 +80,23 @@ def compute_accuracy(dump_file_pattern, ensemble, ensemble_type):
     correct, total, float(correct) * 100 / total, total_context, float(correct) * 100 / total_context)
 
 
-def max_attention_sum(ip, op):
-  max_words = np.zeros(op.shape[0], dtype=int)
+def get_attention_sum(ip, op):
+  word_to_prob = [{0:0} for b in range(op.shape[0])]
   for b in range(op.shape[0]):
-    word_to_prob = {}
-    max_prob = 0
     for w in range(op.shape[1]):
       word = ip[b][w]
       if word != 0:
-        if word not in word_to_prob:
-          word_to_prob[word] = 0
-        word_to_prob[word] += op[b][w]
-        if word_to_prob[word] > max_prob:
-          max_prob = word_to_prob[word]
-          max_words[b] = word
+        if word not in word_to_prob[b]:
+          word_to_prob[b][word] = 0
+        word_to_prob[b][word] += op[b][w]
+    word_to_prob[b] = sorted(word_to_prob[b].iteritems(), key=lambda (k,v): (-v,k))
 
-  return max_words
+  return word_to_prob
+
+
+def max_attention_sum(ip, op):
+  word_to_prob = get_attention_sum(ip, op)
+  return np.array([word_to_prob[b][0][0] for b in word_to_prob])
 
 
 def load_ensemble(filename, ensemble_type):
@@ -123,6 +150,18 @@ def load_ensemble(filename, ensemble_type):
   return inputs, outputs, predictions, answers, filename, int(batch_id)
 
 
+def load_speaker_id(path):
+  sid_tags = []
+  try:
+    with codecs.open(path + 'test.txt', 'r', encoding='utf8') as sf:
+      for line in sf:
+        sid_tags.append([datamodel.extract_ner(w) for w in line.split()[:-1]]) # exclude final answer
+  except:
+    sid_tags = []
+    print 'unable to process speaker id file, skipping'
+  return sid_tags
+
+
 def main(arguments):
   global args
   parser = argparse.ArgumentParser(
@@ -130,6 +169,8 @@ def main(arguments):
       formatter_class=argparse.RawDescriptionHelpFormatter) 
   parser.add_argument('--model_dump_pattern', type=str, default='data\\dump\\*.dump',
                       help='file pattern of model dumps for analysis')
+  parser.add_argument('--speaker_id_path', type=str, default='C:\\Users\\lhoang\\Dropbox\\Personal\\Work\\lambada-dataset\\lambada-sam\\original\\',
+                      help='path of folder containing train/test/valid files with speaker id tags')
   parser.add_argument('--analysis_category_file', type=str, default='',
                       help='absolute path of analysis-category file')
   parser.add_argument('--vocab_file_prefix', type=str, default='lambada',
@@ -155,6 +196,13 @@ def main(arguments):
   sns.set(font_scale=2,font='serif')
   plt.figure(figsize=(60, 40), dpi=100)
 
+  corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None)
+  corpus.load_vocab(args.vocab_file_prefix)
+  idx2word = corpus.dictionary.idx2word
+  word2idx = corpus.dictionary.word2idx
+
+  sid_tags = load_speaker_id(args.speaker_id_path)
+
   if args.ensemble and args.ensemble_type == 'all':
     processed_models = {}
     for filename in glob.glob(args.model_dump_pattern):
@@ -166,16 +214,13 @@ def main(arguments):
         continue
       ensemble_model_pattern = os.path.join(os.path.dirname(filename), '{}.t7.test.*.dump'.format(model_id))
       print '------- Model = {} -------'.format(model_id)
-      compute_accuracy(ensemble_model_pattern, False, None)
+      compute_accuracy(ensemble_model_pattern, False, None, sid_tags, word2idx)
 
     sys.exit(0)
   else:
-    compute_accuracy(args.model_dump_pattern, args.ensemble, args.ensemble_type)
+    compute_accuracy(args.model_dump_pattern, args.ensemble, args.ensemble_type, sid_tags, word2idx)
 
-  corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None)
-  corpus.load_vocab(args.vocab_file_prefix)
-  idx2word = corpus.dictionary.idx2word
-  word2idx = corpus.dictionary.word2idx
+  sys.exit(0)
 
   category_labels = {}
   contexts = []

@@ -25,6 +25,8 @@ class Dictionary(object):
     self.punc2idx = {} # punctuations
     self.stop2idx = {} # stop words
 
+    self.ner2idx = {} # person, org, location etc...
+
 
   def add_word(self, word):
     if word not in self.word2idx:
@@ -40,6 +42,10 @@ class Dictionary(object):
       self.post2idx[tag] = len(self.post2idx) + 1
     return self.post2idx[tag]
 
+  def add_ner_tag(self, tag):
+    if tag not in self.ner2idx:
+      self.ner2idx[tag] = len(self.ner2idx) + 1
+    return self.ner2idx[tag]
 
   def update_count(self, word):
     self.word2count[word] = self.word2count[word] + 1 # the word must be part of the vocab
@@ -58,6 +64,9 @@ class Dictionary(object):
       for key, value in sorted(self.post2idx.iteritems(), key=lambda (k,v): (v,k)):
         posf.write(u'{}\t{}\n'.format(key,value))
 
+    with codecs.open(file_prefix + '.ner.vocab', 'w', encoding='utf8') as posf:
+      for key, value in sorted(self.ner2idx.iteritems(), key=lambda (k,v): (v,k)):
+        posf.write(u'{}\t{}\n'.format(key,value))
 
   def read_from_file(self, file_prefix):
     with codecs.open(file_prefix + '.vocab', 'r', encoding='utf8') as inf:
@@ -71,6 +80,11 @@ class Dictionary(object):
       for line in posf:
         parts = line.split()
         self.post2idx[parts[0]] = int(parts[1])
+
+    with codecs.open(file_prefix + '.ner.vocab', 'r', encoding='utf8') as nerf:
+      for line in nerf:
+        parts = line.split()
+        self.ner2idx[parts[0]] = int(parts[1])
 
 
   def create_definition(self):
@@ -175,11 +189,11 @@ class Corpus(object):
     self.valid   = self.tokenize(os.path.join(path, valid),   training = True)
     print_msg('Loading test data...', 1, self.args_verbose_level)
     self.test    = self.tokenize(os.path.join(path, test),    training = False)
-    print_msg('Loading control data...', 1, self.args_verbose_level)
-    self.control = self.tokenize(os.path.join(path, control), training = False)
-    print_msg('Loading analysis data...', 1, self.args_verbose_level)
-    self.analysis = self.tokenize(os.path.join(path, analysis), training = False)
-    print_msg('Loading wordnet definition data...', 1, self.args_verbose_level)
+    # print_msg('Loading control data...', 1, self.args_verbose_level)
+    # self.control = self.tokenize(os.path.join(path, control), training = False)
+    # print_msg('Loading analysis data...', 1, self.args_verbose_level)
+    # self.analysis = self.tokenize(os.path.join(path, analysis), training = False)
+    # print_msg('Loading wordnet definition data...', 1, self.args_verbose_level)
     self.definition = self.dictionary.create_definition()
 
     print_msg('\nTraining Data Statistics:\n', 1, self.args_verbose_level)
@@ -189,10 +203,16 @@ class Corpus(object):
       np.max(train_context_length), np.min(train_context_length), np.mean(train_context_length), np.std(train_context_length)), 1, self.args_verbose_level)
 
     print_msg('POS Size: {}'.format(len(self.dictionary.post2idx)), 1, self.args_verbose_level)
+    print_msg('NER Size: {}'.format(len(self.dictionary.ner2idx)), 1, self.args_verbose_level)
 
 
   def save(self, file_prefix):
     self.dictionary.write_to_file(file_prefix)
+
+
+  def extract_ner(self, word):
+    match = re.match('(.*)(\/([A-Z]*))(\|\|\|(.*))?', word.strip())
+    return match.group(1), match.group(3), match.group(5) if len(match.groups()) >= 5 else None
 
 
   def tokenize(self, path, training):
@@ -201,18 +221,20 @@ class Corpus(object):
     data = { 
       'data': [], # token ids for each word in the corpus 
       'post': [], # pos tags 
+      'ner': [], # ner tags 
       'sentence': [], # sentence numbers 
       'speech': [], # speech numbers 
       'extr': [], # extra features, such as frequency of token in the context, whether previous bi-gram of token match with that of the answer etc...
       'offsets': [], # offset locations for each line in the final 1-d data array 
       'context_length': [], # count of words in the context
+      'line_number': [] # line number of example in file
     }
 
     self.tokenize_file(path, data, training)
 
-    sorted_data = { 'data': data['data'], 'post': data['post'], 'sentence': data['sentence'], 'speech': data['speech'], 'extr': data['extr'] }
+    sorted_data = { 'data': data['data'], 'post': data['post'], 'ner': data['ner'], 'sentence': data['sentence'], 'speech': data['speech'], 'extr': data['extr'] }
 
-    loc = np.array([np.array(data['offsets']), np.array(data['context_length'])]).T
+    loc = np.array([np.array(data['offsets']), np.array(data['context_length']), np.array(data['line_number'])]).T
     loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
     sorted_data['location'] = loc
     return sorted_data
@@ -226,7 +248,8 @@ class Corpus(object):
     with codecs.open(file, 'r', encoding='utf8') as f:
       for line in f:
         num_lines_in_file += 1
-        words = line.split()
+        groups = [self.extract_ner(g) for g in line.split()]
+        words = [g[0] for g in groups]
         
         if self.context_target_separator:
           if num_lines_in_file == 1:
@@ -238,11 +261,13 @@ class Corpus(object):
             continue
 
           words.pop(sep + 1) # remove separator
+          groups.pop(sep + 1)
           target_answer_separator_index = words.index(self.context_target_separator)
           if target_answer_separator_index <= 0:
             print_msg('INFO: SKIPPING... Target-Answer separator not found, line = {}'.format(line), 2, self.args_verbose_level)
             continue
           words.pop(target_answer_separator_index)
+          groups.pop(target_answer_separator_index)
 
         num_words = len(words)
         pos_tags = [t[1] for t in nltk.pos_tag(words)]
@@ -272,7 +297,8 @@ class Corpus(object):
 
         data['offsets'].append(len(data['data']) + 1)
         data['context_length'].append(num_words - 1)
-
+        data['line_number'].append(num_lines_in_file)
+        
         words = [word if word in self.dictionary.word2idx else UNKNOWN for word in words]
 
         sentence_number = 1
@@ -292,7 +318,9 @@ class Corpus(object):
           data['data'].append(self.dictionary.word2idx[word])
 
           pos_tag = pos_tags[i]
+          ner_tag = groups[i][1]
           data['post'].append(self.dictionary.add_pos_tag(pos_tag))
+          data['ner'].append(self.dictionary.add_ner_tag(ner_tag))
           data['sentence'].append(sentence_number)
           data['speech'].append(speech_number if in_speech else 1)
 

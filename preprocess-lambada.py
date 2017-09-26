@@ -41,21 +41,25 @@ def load_file(file):
     train = {
       'data': np.array(f['train_data']),
       'post': np.array(f['train_post']),
+      'ner': np.array(f['train_ner']),
       'location': np.array(f['train_location'], dtype=int),
     }
     test = {
       'data': np.array(f['test_data'], dtype=int),
       'post': np.array(f['test_post'], dtype=int),
+      'ner': np.array(f['test_ner'], dtype=int),
       'location': np.array(f['test_location'], dtype=int),
     }
     valid = {
       'data': np.array(f['valid_data'], dtype=int),
       'post': np.array(f['valid_post'], dtype=int),
+      'ner': np.array(f['valid_ner'], dtype=int),
       'location': np.array(f['valid_location'], dtype=int),
     }
     control = {
       'data': np.array(f['control_data'], dtype=int),
       'post': np.array(f['control_post'], dtype=int),
+      'ner': np.array(f['control_ner'], dtype=int),
       'location': np.array(f['control_location'], dtype=int),
     }
   return train,test,valid,control
@@ -106,6 +110,8 @@ def debug_translate(corpus, file, mode):
     inter_translate(corpus.dictionary.idx2word)
   elif mode == 'postag':
     inter_translate({v: k for k, v in corpus.dictionary.post2idx.iteritems()})
+  elif mode == 'nertag':
+    inter_translate({v: k for k, v in corpus.dictionary.ner2idx.iteritems()})
   else:
     train,test,valid,control = load_file(file)
 
@@ -213,6 +219,7 @@ def main(arguments):
       f['stopwords']        = np.array(corpus.stopwords) # punctuations are ignored during test time
       f['vocab_size']       = np.array([len(corpus.dictionary)])
       f['post_vocab_size']  = np.array([len(corpus.dictionary.post2idx)])
+      f['ner_vocab_size']  = np.array([len(corpus.dictionary.ner2idx)])
       f['sent_vocab_size']  = np.array([corpus.max_sentence_number])
       f['spee_vocab_size']  = np.array([corpus.max_speech_number])
 
@@ -221,6 +228,7 @@ def main(arguments):
 
       f['train_data']       = np.array(corpus.train['data'])
       f['train_post']       = np.array(corpus.train['post'])
+      f['train_ner']        = np.array(corpus.train['ner'])
       f['train_sentence']   = np.array(corpus.train['sentence'])
       f['train_speech']     = np.array(corpus.train['speech'])
       f['train_extr']       = np.array(corpus.train['extr'])
@@ -228,6 +236,7 @@ def main(arguments):
 
       f['valid_data']       = np.array(corpus.valid['data'])
       f['valid_post']       = np.array(corpus.valid['post'])
+      f['valid_ner']        = np.array(corpus.valid['ner'])
       f['valid_sentence']   = np.array(corpus.valid['sentence'])
       f['valid_speech']     = np.array(corpus.valid['speech'])
       f['valid_extr']       = np.array(corpus.valid['extr'])
@@ -235,24 +244,27 @@ def main(arguments):
 
       f['test_data']        = np.array(corpus.test['data'])
       f['test_post']        = np.array(corpus.test['post'])
+      f['test_ner']         = np.array(corpus.test['ner'])
       f['test_sentence']    = np.array(corpus.test['sentence'])
       f['test_speech']      = np.array(corpus.test['speech'])
       f['test_extr']        = np.array(corpus.test['extr'])
       f['test_location']    = np.array(corpus.test['location'])
 
-      f['control_data']     = np.array(corpus.control['data'])
-      f['control_post']     = np.array(corpus.control['post'])
-      f['control_sentence'] = np.array(corpus.control['sentence'])
-      f['control_speech']   = np.array(corpus.control['speech'])
-      f['control_extr']     = np.array(corpus.control['extr'])
-      f['control_location'] = np.array(corpus.control['location'])
+      # f['control_data']     = np.array(corpus.control['data'])
+      # f['control_post']     = np.array(corpus.control['post'])
+      # f['control_ner']      = np.array(corpus.control['ner'])
+      # f['control_sentence'] = np.array(corpus.control['sentence'])
+      # f['control_speech']   = np.array(corpus.control['speech'])
+      # f['control_extr']     = np.array(corpus.control['extr'])
+      # f['control_location'] = np.array(corpus.control['location'])
 
-      f['analysis_data']     = np.array(corpus.analysis['data'])
-      f['analysis_post']     = np.array(corpus.analysis['post'])
-      f['analysis_sentence'] = np.array(corpus.analysis['sentence'])
-      f['analysis_speech']   = np.array(corpus.analysis['speech'])
-      f['analysis_extr']     = np.array(corpus.analysis['extr'])
-      f['analysis_location'] = np.array(corpus.analysis['location'])
+      # f['analysis_data']     = np.array(corpus.analysis['data'])
+      # f['analysis_post']     = np.array(corpus.analysis['post'])
+      # f['analysis_ner']      = np.array(corpus.analysis['ner'])
+      # f['analysis_sentence'] = np.array(corpus.analysis['sentence'])
+      # f['analysis_speech']   = np.array(corpus.analysis['speech'])
+      # f['analysis_extr']     = np.array(corpus.analysis['extr'])
+      # f['analysis_location'] = np.array(corpus.analysis['location'])
 
       if corpus.embeddings != None:
         f['word_embeddings'] = np.array(corpus.embeddings)
