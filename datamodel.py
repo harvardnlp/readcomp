@@ -222,6 +222,7 @@ class Corpus(object):
       'data': [], # token ids for each word in the corpus 
       'post': [], # pos tags 
       'ner': [], # ner tags 
+      'speaker_id': [], # speaker id 
       'sentence': [], # sentence numbers 
       'speech': [], # speech numbers 
       'extr': [], # extra features, such as frequency of token in the context, whether previous bi-gram of token match with that of the answer etc...
@@ -232,7 +233,7 @@ class Corpus(object):
 
     self.tokenize_file(path, data, training)
 
-    sorted_data = { 'data': data['data'], 'post': data['post'], 'ner': data['ner'], 'sentence': data['sentence'], 'speech': data['speech'], 'extr': data['extr'] }
+    sorted_data = { 'data': data['data'], 'post': data['post'], 'ner': data['ner'], 'sid': data['speaker_id'], 'sentence': data['sentence'], 'speech': data['speech'], 'extr': data['extr'] }
 
     loc = np.array([np.array(data['offsets']), np.array(data['context_length']), np.array(data['line_number'])]).T
     loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
@@ -246,6 +247,7 @@ class Corpus(object):
     puncstop_answer_count = 0
 
     with codecs.open(file, 'r', encoding='utf8') as f:
+      speaker_id_list = []
       for line in f:
         num_lines_in_file += 1
         groups = [self.extract_ner(g) for g in line.split()]
@@ -319,8 +321,16 @@ class Corpus(object):
 
           pos_tag = pos_tags[i]
           ner_tag = groups[i][1]
+          speaker_id = groups[i][2]
+          speaker_id_token = 0
+          if speaker_id is not None:
+            if speaker_id not in speaker_id_list:
+              speaker_id_list.append(speaker_id)
+            speaker_id_token = self.dictionary.add_word('speaker{}'.format(speaker_id_list.index(speaker_id) + 1))
+
           data['post'].append(self.dictionary.add_pos_tag(pos_tag))
           data['ner'].append(self.dictionary.add_ner_tag(ner_tag))
+          data['speaker_id'].append(speaker_id_token)
           data['sentence'].append(sentence_number)
           data['speech'].append(speech_number if in_speech else 1)
 
