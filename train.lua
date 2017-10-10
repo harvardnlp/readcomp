@@ -210,6 +210,7 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent,
       local cur_context_sid  = tensor_sid [{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
       local cur_context_sent = tensor_sent[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
       local cur_context_spee = tensor_spee[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+
       local cur_context_extr = tensor_extr[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}] -- cur_context_length x extr_size
 
       local cur_answer  = tensor_data[offset_end_context]
@@ -904,6 +905,9 @@ if #opt.testmodel > 0 then
   test_model(opt.testmodel)
   -- print("Processing analysis set")
   -- test_model(opt.testmodel, 'analysis', data.analysis_data, data.analysis_post, data.analysis_ner, data.analysis_sentence, data.analysis_speech, data.analysis_extr, data.analysis_location)
+
+  print("Processing validation set")
+  test_model(opt.testmodel, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
   os.exit()
 end
 
