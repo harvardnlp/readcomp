@@ -220,8 +220,6 @@ def main(arguments):
   else:
     compute_accuracy(args.model_dump_pattern, args.ensemble, args.ensemble_type, sid_tags, word2idx)
 
-  sys.exit(0)
-
   category_labels = {}
   contexts = []
 
