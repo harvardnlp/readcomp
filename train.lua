@@ -24,7 +24,7 @@ cmd:text("th train.lua --progress --earlystop 50 --cuda --device 2 --maxseqlen 1
 cmd:text('Options:')
 -- training
 cmd:option('--model', 'asr', 'type of models to train, acceptable values: {crf, asr ,ga}')
-cmd:option('--gahop', 3, 'number of hops in gated attention model')
+cmd:option('--topk', 5, 'number of top predictions to narrow to in the next iteration')
 cmd:option('--adamconfig', '{0.9, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
 cmd:option('--cuda', false, 'use CUDA')
@@ -318,6 +318,20 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   local all_batches = torch.range(1, tensor_location:size(1), opt.batchsize)
   local ntestbatches = all_batches:size(1)
 
+  local topk_answers
+  if dump_name == 'train' then
+    topk_train = topk_train and topk_train or torch.zeros(ntestbatches, opt.batchsize, opt.topk, 2)
+    topk_answers = topk_train
+  else
+    if dump_name == 'valid' then
+      topk_valid = topk_valid and topk_valid or torch.zeros(ntestbatches, opt.batchsize, opt.topk, 2)
+      topk_answers = topk_valid
+    else
+      topk_test = topk_test and topk_test or torch.zeros(ntestbatches, opt.batchsize, opt.topk, 2)
+      topk_answers = topk_test
+    end
+  end
+
   local correct = 0
   local correct_top2 = 0
   local correct_top3 = 0
@@ -330,7 +344,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     local inputs = tests_con
     local answer = tests_ans
     local in_words = inputs[1][1]
-    local outputs = mask_attention(in_words, model:forward(inputs))
+    local outputs = mask_attention(in_words, model:forward(inputs), topk_answers[i])
 
     local predictions = answer.new():resizeAs(answer):zero()
     local truth = {}
@@ -338,8 +352,6 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     for b = 1,outputs:size(1) do
       if answer[b] ~= 0 then
         local word_to_prob = tds.hash()
-        local max_prob = 0
-        local max_word = 0
         for iw = 1, outputs:size(2) do
           local word = in_words[iw][b]
           if word ~= 0 then
@@ -347,39 +359,35 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
               word_to_prob[word] = 0
             end
             word_to_prob[word] = word_to_prob[word] + outputs[b][iw]
-            if max_prob < word_to_prob[word] then
-              max_prob = word_to_prob[word]
-              max_word = word
-            end
           end
         end
+
+        create_sorted_topk(word_to_prob, topk_answers[i][b])
+
+        local topk_preds = topk_answers[i][b]
+
+        local max_word = topk_preds[1][1]
+        local max_prob = topk_preds[1][2]
         if max_word == answer[b] then
           correct = correct + 1
         end
-        local answer_rank = 1
-        if word_to_prob[answer[b]] == nil then
-          answer_rank = math.huge
-        else
-          for w,p in pairs(word_to_prob) do
-            if w ~= answer[b] and p > word_to_prob[answer[b]] then
-              answer_rank = answer_rank + 1
+        local answer_in_context, answer_rank = find_element(answer[b], topk_preds[{{},1}])
+        if answer_in_context then
+          if answer_rank <= 2 then
+            correct_top2 = correct_top2 + 1
+          end
+          if answer_rank <= 3 then
+            correct_top3 = correct_top3 + 1
+          end
+          if answer_rank <= 5 then
+            correct_top5 = correct_top5 + 1
+            if scorek[answer_rank] == nil then
+              scorek[answer_rank] = {}
+              scorek[100 + answer_rank] = {}
             end
+            scorek[answer_rank][#scorek[answer_rank] + 1] = word_to_prob[answer[b]]
+            scorek[100 + answer_rank][#scorek[100 + answer_rank] + 1] = max_prob - word_to_prob[answer[b]]
           end
-        end
-        if answer_rank <= 2 then
-          correct_top2 = correct_top2 + 1
-        end
-        if answer_rank <= 3 then
-          correct_top3 = correct_top3 + 1
-        end
-        if answer_rank <= 5 then
-          correct_top5 = correct_top5 + 1
-          if scorek[answer_rank] == nil then
-            scorek[answer_rank] = {}
-            scorek[100 + answer_rank] = {}
-          end
-          scorek[answer_rank][#scorek[answer_rank] + 1] = word_to_prob[answer[b]]
-          scorek[100 + answer_rank][#scorek[100 + answer_rank] + 1] = max_prob - word_to_prob[answer[b]]
         end
         num_examples = num_examples + 1
 
@@ -583,27 +591,68 @@ function build_model()
   end
 end
 
-function mask_attention(input_context, output_pre_attention)
+function find_element(elem, tensor1d)
+  for i = 1, tensor1d:size(1) do
+    if elem == tensor1d[i] then
+      return true, i
+    end
+  end
+  return nil
+end
+
+function mask_attention(input_context, output_pre_attention, topk_answers)
   -- attention while masking out stopwords, punctuations
   for i = 1, input_context:size(1) do -- seqlen
     for j = 1, input_context:size(2) do -- batchsize
-      if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
-        output_pre_attention[j][i] = -math.huge
+      if topk_answers then
+        local topk_words = topk_answers[{{},1}]
+        topk_words = topk_words[topk_words:ne(0)]
+        if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
+          output_pre_attention[j][i] = -math.huge
+        end
+      else
+        if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
+          output_pre_attention[j][i] = -math.huge
+        end
       end
     end
   end
   return attention_layer:forward(output_pre_attention)
 end
 
-function mask_attention_gradients(input_context, output_grad)
+function mask_attention_gradients(input_context, output_grad, topk_answers)
   -- input_context is seqlen x batchsize
   -- output_grad is batchsize x seqlen
   for i = 1, input_context:size(1) do
     for j = 1, input_context:size(2) do
-      if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
-        output_grad[j][i] = 0
+      if topk_answers then
+        local topk_words = topk_answers[{{},1}]
+        topk_words = topk_words[topk_words:ne(0)]
+        if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
+          output_grad[j][i] = 0
+        end
+      else
+        if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
+          output_grad[j][i] = 0
+        end
       end
     end
+  end
+end
+
+-- get the top-k predictions, sorted by descending score
+function create_sorted_topk(word_to_prob, topk_answers)
+  prealloc_wtp = prealloc_wtp and prealloc_wtp:resize(#word_to_prob, 2):zero() or torch.zeros(#word_to_prob, 2)
+  local i = 1
+  for w,p in pairs(word_to_prob) do
+    prealloc_wtp[i][1] = w
+    prealloc_wtp[i][2] = p
+    i = i + 1
+  end
+  local _, sorted_index = prealloc_wtp[{{}, 2}]:sort(true) -- descending
+  topk_answers:zero()
+  for i = 1, math.min(topk_answers:size(1), #word_to_prob) do
+    topk_answers[i] = prealloc_wtp[sorted_index[i]]
   end
 end
 
@@ -641,7 +690,23 @@ function train(params, grad_params, epoch)
 
       -- forward
       local outputs_pre = lm:forward(inputs)
-      local outputs = mask_attention(inputs[1][1], outputs_pre)
+
+      -- if epoch > 1 then
+      --   -- print('outputs_pre')
+      --   -- print(outputs_pre)
+      --   -- print('outputs')
+      --   -- print(outputs)
+      --   print('topk_train')
+      --   print(topk_train:size())
+      --   print('randind[ir]')
+      --   print(randind[ir])
+      --   -- print('topk_train[randind[ir]]')
+      --   -- print(topk_train[randind[ir]])
+      --   -- outputs_pre:foo()
+      -- end
+
+      local previous_topk = topk_train and topk_train[randind[ir]] or nil
+      local outputs = mask_attention(inputs[1][1], outputs_pre, previous_topk)
 
       if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
         -- print('inputs')
@@ -698,40 +763,12 @@ function train(params, grad_params, epoch)
           for ians = 1, #answer_inds[ib] do
             prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
           end
-          if prob_answer == 0 then
-            print('ERROR: zero prob assigned to the correct answer at the following indices: ')
-
-            for inode,node in ipairs(lm.forwardnodes) do
-              if node.data.annotations.name == 'Yd' then
-                print('------------------------------------')
-                print(node.data.annotations.name)
-                print(node.data.module.output[ib])
-              end
+          if prob_answer ~= 0 then
+            for ians = 1, #answer_inds[ib] do
+              grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
             end
-
-            print(answer_inds[ib])
-            print('ir = '.. ir .. ', all_batches[randind[ir]] = ' .. all_batches[randind[ir]] .. ', ib = ' .. ib)
-            print('inputs')
-            print(inputs[1][1][{{}, ib}]:contiguous():view(1,-1))
-            print('outputs_pre')
-            print(outputs_pre[ib]:view(1,-1))
-            print('outputs')
-            print(outputs[ib]:view(1,-1))
-              
-            for inode,node in ipairs(lm.forwardnodes) do
-              if node.data.annotations.name == 'u' then
-                print('------------------------------------')
-                print(node.data.annotations.name)
-                print(node.data.module.output[ib]:view(1,-1))
-              end
-            end
-
-            outputs:foo() -- intentionally break
+            err = err - torch.log(prob_answer)
           end
-          for ians = 1, #answer_inds[ib] do
-            grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
-          end
-          err = err - torch.log(prob_answer)
         end
       end
       if opt.profile then
@@ -770,7 +807,7 @@ function train(params, grad_params, epoch)
 
       -- backward 
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
-      mask_attention_gradients(inputs[1][1], grad_outputs)
+      mask_attention_gradients(inputs[1][1], grad_outputs, previous_topk)
 
       lm:zeroGradParameters()
       lm:backward(inputs, grad_outputs)
@@ -829,7 +866,7 @@ function validate(ntrial, epoch)
 
     local inputs = valid_con
     local answer_inds = valid_ans_ind
-    local outputs = mask_attention(inputs[1][1], lm:forward(inputs))
+    local outputs = mask_attention(inputs[1][1], lm:forward(inputs), topk_valid and topk_valid[all_batches[i]] or nil)
     local err = 0
     for ib = 1, opt.batchsize do
       if valid_ans[ib] > 0 and puncs[valid_ans[ib]] == nil and stopwords[valid_ans[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers
@@ -837,7 +874,9 @@ function validate(ntrial, epoch)
         for ians = 1, #answer_inds[ib] do
           prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
         end
-        err = err - torch.log(prob_answer)
+        if prob_answer ~= 0 then
+          err = err - torch.log(prob_answer)
+        end
       end
     end
     sumErr = sumErr + err
@@ -861,7 +900,7 @@ function validate(ntrial, epoch)
 
   -- early-stopping
   if validloss < xplog.minvalloss then
-    test_model()
+    -- test_model()
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch 
@@ -899,6 +938,11 @@ ner_vocab_size  = data.ner_vocab_size [1]
 sent_vocab_size = data.sent_vocab_size[1]
 spee_vocab_size = data.spee_vocab_size[1]
 extr_size = data.train_extr:size(2)
+
+-- store the top-k predictions to be used at the next epoch
+topk_train = nil
+topk_valid = nil
+topk_test  = nil
 
 if #opt.testmodel > 0 then
   print("Processing test set")
@@ -965,6 +1009,14 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
 
 
   epoch = epoch + 1
-end
 
-test_model()
+  print("Processing test set")
+  test_model()
+
+  -- print("Processing train set")
+  -- test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, data.train_location)
+
+  print("Processing validation set")
+  test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
+
+end
