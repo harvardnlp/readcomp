@@ -604,7 +604,7 @@ function mask_attention(input_context, output_pre_attention, topk_answers)
   -- attention while masking out stopwords, punctuations
   for i = 1, input_context:size(1) do -- seqlen
     for j = 1, input_context:size(2) do -- batchsize
-      if topk_answers then
+      if activate_topk and topk_answers then
         local topk_words = topk_answers[{{},1}]
         topk_words = topk_words[topk_words:ne(0)]
         if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
@@ -625,7 +625,7 @@ function mask_attention_gradients(input_context, output_grad, topk_answers)
   -- output_grad is batchsize x seqlen
   for i = 1, input_context:size(1) do
     for j = 1, input_context:size(2) do
-      if topk_answers then
+      if activate_topk and topk_answers then
         local topk_words = topk_answers[{{},1}]
         topk_words = topk_words[topk_words:ne(0)]
         if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
@@ -1007,16 +1007,16 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   train(params, grad_params, epoch)
   validate(ntrial, epoch)
 
-
-  epoch = epoch + 1
+  -- print("Processing validation set")
+  -- test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
 
   print("Processing test set")
   test_model()
 
-  -- print("Processing train set")
-  -- test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, data.train_location)
+  print("Processing train set")
+  test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, data.train_location)
 
-  print("Processing validation set")
-  test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
+  epoch = epoch + 1
+  activate_topk = true
 
 end
