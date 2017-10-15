@@ -605,7 +605,7 @@ function mask_attention(input_context, output_pre_attention, topk_answers)
   for i = 1, input_context:size(1) do -- seqlen
     for j = 1, input_context:size(2) do -- batchsize
       if activate_topk and topk_answers then
-        local topk_words = topk_answers[{{},1}]
+        local topk_words = topk_answers[{j,{},1}]
         topk_words = topk_words[topk_words:ne(0)]
         if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
           output_pre_attention[j][i] = -math.huge
@@ -626,7 +626,7 @@ function mask_attention_gradients(input_context, output_grad, topk_answers)
   for i = 1, input_context:size(1) do
     for j = 1, input_context:size(2) do
       if activate_topk and topk_answers then
-        local topk_words = topk_answers[{{},1}]
+        local topk_words = topk_answers[{j,{},1}]
         topk_words = topk_words[topk_words:ne(0)]
         if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
           output_grad[j][i] = 0
@@ -1005,7 +1005,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("Epoch #"..epoch.." :")
 
   train(params, grad_params, epoch)
-  validate(ntrial, epoch)
+  -- validate(ntrial, epoch)
 
   -- print("Processing validation set")
   -- test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
