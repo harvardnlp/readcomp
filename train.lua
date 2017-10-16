@@ -653,6 +653,9 @@ function create_sorted_topk(word_to_prob, topk_answers)
   topk_answers:zero()
   for i = 1, math.min(topk_answers:size(1), #word_to_prob) do
     topk_answers[i] = prealloc_wtp[sorted_index[i]]
+    if topk_answers[i][2] == 0 then
+      topk_answers[i][1] = 0
+    end
   end
 end
 
