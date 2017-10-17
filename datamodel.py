@@ -307,6 +307,7 @@ class Corpus(object):
         in_speech = False
         extr_word_freq = {}
         
+        ner_names = []
         for i in range(len(words)):
           word = words[i]
 
@@ -322,6 +323,9 @@ class Corpus(object):
           pos_tag = pos_tags[i]
           ner_tag = groups[i][1]
           speaker_id = groups[i][2]
+
+          if ner_tag == "PERSON":
+            ner_names.append((word, i, sentence_number))
 
           data['post'].append(self.dictionary.add_pos_tag(pos_tag))
           data['ner'].append(self.dictionary.add_ner_tag(ner_tag))
@@ -383,8 +387,26 @@ class Corpus(object):
               if i > 3 and words[i - 3] == words[num_words - 4] and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2]:
                 bigram_match = 1.5
 
+          ner_last3names = 0
+          ner_inlastsent = 0
+          ner_sameasnext = 0
+          ner_sameaslast = 0
+          for j in range(len(ner_names)):
+            nern = ner_names[j]
+            if nern[1] == i:
+              ner_last3names = 1 if j >= len(ner_names) - 3 else 0
+              ner_inlastsent = 1 if nern[2] == sentence_number else 0 # whether this name is in the last sentence
+              ner_sameaslast = 1 if j > 0 and nern[0] == ner_names[j-1][0] else 0
+              ner_sameasnext = 1 if j < len(ner_names) - 1 and nern[0] == ner_names[j + 1][0] else 0
+              break
+
           extra_features.append(freq)
           extra_features.append(bigram_match)
+
+          extra_features.append(ner_last3names)
+          extra_features.append(ner_inlastsent)
+          extra_features.append(ner_sameasnext)
+          extra_features.append(ner_sameaslast)
 
           data['extr'].append(np.array(extra_features))
 
