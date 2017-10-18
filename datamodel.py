@@ -324,7 +324,7 @@ class Corpus(object):
           ner_tag = groups[i][1]
           speaker_id = groups[i][2]
 
-          if ner_tag == "PERSON":
+          if ner_tag == "PERSON" and i < len(words) - 1:
             ner_names.append((word, i, sentence_number))
 
           data['post'].append(self.dictionary.add_pos_tag(pos_tag))
