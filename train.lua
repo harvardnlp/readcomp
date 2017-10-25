@@ -482,62 +482,6 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
   return doc_rnn
 end
 
-function build_query_rnn(use_lookup, in_size)
-  -- for query
-  local lm_query_forward  = nn.Sequential()
-  if use_lookup then
-    local lookup_query_forward = lookup:clone('weight', 'gradWeight')
-    lm_query_forward:add(lookup_query_forward) -- input is seqlen x batchsize
-    if opt.dropout > 0 then
-        lm_query_forward:add(nn.Dropout(opt.dropout))
-    end
-  end
-
-  local lm_query_backward = nn.Sequential()
-  if use_lookup then
-    local lookup_query_backward = lookup:clone('weight', 'gradWeight')
-    lm_query_backward:add(lookup_query_backward) -- input is seqlen x batchsize
-    if opt.dropout > 0 then
-        lm_query_backward:add(nn.Dropout(opt.dropout))
-    end
-  end
-
-  for i,hiddensize in ipairs(opt.hiddensize) do
-
-    if opt.rnntype == 'gru' then
-      local rnn_forward =  nn.SeqGRU(in_size, hiddensize)
-      rnn_forward.maskzero = true
-      lm_query_forward:add(rnn_forward)
-
-      local rnn_backward =  opt.projsize < 1 and nn.SeqGRU(in_size, hiddensize)
-      rnn_backward.maskzero = true
-      lm_query_backward:add(rnn_backward)
-    else
-      local rnn_forward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
-      rnn_forward.maskzero = true
-      lm_query_forward:add(rnn_forward)
-
-      local rnn_backward =  opt.projsize < 1 and nn.SeqLSTM(in_size, hiddensize) or nn.SeqLSTMP(in_size, opt.projsize, hiddensize)
-      rnn_backward.maskzero = true
-      lm_query_backward:add(rnn_backward)
-    end
-    if opt.dropout > 0 then
-      lm_query_forward:add(nn.Dropout(opt.dropout))
-      lm_query_backward:add(nn.Dropout(opt.dropout))
-    end
-
-    in_size = hiddensize
-  end
-
-  lm_query_forward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
-  lm_query_backward:add(nn.SplitTable(1)):add(nn.SelectTable(-1))
-
-  return nn.Sequential()
-    :add(nn.ParallelTable():add(lm_query_forward):add(lm_query_backward))
-    :add(nn.JoinTable(2)) -- batch x (2 * hiddensize)
-    :add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
-end
-
 function build_model()
 
   if not lm then
