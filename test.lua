@@ -9,6 +9,7 @@ require 'SinusoidPositionEncoding'
 require 'MultiHeadAttention'
 require 'PositionWiseFFNN'
 require 'LayerNorm'
+require 'MaskExtraction'
 
 
 cmd = torch.CmdLine()
@@ -308,6 +309,65 @@ function nntest.LayerNorm()
   end
 end
 
+function nntest.MaskExtraction()
+  local ntests = 5
+  local max_dim1 = 8
+  local max_dim2 = 16
+  local max_dim3 = 16
+
+  local x = torch.rand(6, 32, 16) -- batchsize x seqlen x hidsize
+  local m = torch.ones(6, 32)
+  m[1][4] = 2
+  m[1][13] = 2
+  m[1][22] = 2
+  m[{2,{10,21}}] = 2
+  m[3][5] = 2
+  m[3][10] = 2
+  m[4][1] = 2
+  m[5][32] = 2
+
+  local y = nn.MaskExtraction(2, 5):forward({x,m})
+  mytester:assertlt(y[1][1]:ne(x[1][4]):sum(),precision, 'error')
+  mytester:assertlt(y[1][2]:ne(x[1][13]):sum(),precision, 'error')
+  mytester:assertlt(y[1][3]:ne(x[1][22]):sum(),precision, 'error')
+  mytester:assertlt(y[{2}]:ne(x[{2,{10,14}}]):sum(),precision, 'error')
+  mytester:assertlt(y[3][1]:ne(x[3][5]):sum(),precision, 'error')
+  mytester:assertlt(y[3][2]:ne(x[3][10]):sum(),precision, 'error')
+  mytester:assertlt(y[4][1]:ne(x[4][1]):sum(),precision, 'error')
+  mytester:assertlt(y[5][1]:ne(x[5][32]):sum(),precision, 'error')
+
+  for t = 1, ntests do
+    local dim1 = math.random(1, max_dim1)
+    local dim2 = math.random(1, max_dim2)
+    local dim3 = math.random(1, max_dim3)
+
+    local input = torch.rand(dim1,dim2,dim3)
+    local mask = torch.rand(dim1,dim2):mul(2):ceil()
+    local extendedInput = torch.zeros(dim1*dim2*dim3 + dim1*dim2)
+    extendedInput[{{1, dim1*dim2*dim3}}] = input
+    extendedInput[{{dim1*dim2*dim3 + 1, dim1*dim2*dim3 + dim1*dim2}}] = mask
+
+    local module = nn.Sequential()
+      :add(nn.ConcatTable()
+        :add(nn.Sequential():add(nn.Narrow(1, 1, dim1 * dim2 * dim3)):add(nn.View(dim1, dim2, dim3)))
+        :add(nn.Sequential():add(nn.Narrow(1, dim1 * dim2 * dim3 + 1, dim1 * dim2)):add(nn.View(dim1, dim2))))
+      :add(nn.MaskExtraction(2, 5))
+      :add(nn.Sum())
+
+    local jac_fprop = nn.Jacobian.forward(module, extendedInput, extendedInput, perturbation)
+    local jac_bprop = nn.Jacobian.backward(module, extendedInput)
+    local error = jac_fprop-jac_bprop
+    local err = error:abs():max()
+
+    mytester:assertlt(err, precision, 'error on state ')
+
+    -- IO
+    local ferr,berr = jac.testIO(module,extendedInput)
+    mytester:eq(ferr, 0, torch.typename(module) .. ' - i/o forward err ', precision)
+    mytester:eq(berr, 0, torch.typename(module) .. ' - i/o backward err ', precision)
+  end
+end
+
 mytester:add(nntest)
 
 jac = nn.Jacobian
@@ -336,5 +396,6 @@ nn.test{
   'SinusoidPositionEncoding', 
   'MultiHeadAttention', 
   'LayerNorm', 
-  'PositionWiseFFNN'
+  'PositionWiseFFNN',
+  'MaskExtraction'
 }
