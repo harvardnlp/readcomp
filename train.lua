@@ -4,6 +4,7 @@ require 'rnn'
 require 'nngraph'
 require 'SeqBRNNP'
 require 'MaskZeroSeqBRNNFinal'
+require 'MaskExtraction'
 require 'CAddTableBroadcast'
 require 'optim'
 
@@ -25,6 +26,8 @@ cmd:text('Options:')
 -- training
 cmd:option('--model', 'asr', 'type of models to train, acceptable values: {crf, asr ,ga}')
 cmd:option('--topk', 5, 'number of top predictions to narrow to in the next iteration')
+cmd:option('--entity', 5, 'number of entities to extract')
+cmd:option('--entitysize', 10, 'number of entities for prediction')
 cmd:option('--adamconfig', '{0.9, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
 cmd:option('--cuda', false, 'use CUDA')
@@ -344,7 +347,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     local inputs = tests_con
     local answer = tests_ans
     local in_words = inputs[1][1]
-    local outputs = mask_attention(in_words, model:forward(inputs), topk_answers[i])
+    local outputs = mask_attention(in_words, model:forward(inputs)[1], topk_answers[i])
 
     local predictions = answer.new():resizeAs(answer):zero()
     local truth = {}
@@ -486,16 +489,31 @@ function build_model()
 
   if not lm then
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize, opt.nersize, opt.sentsize, opt.speesize)
+    Ner = nn.Sequential():add(nn.SelectTable(1)):add(nn.SelectTable(3)):add(nn.Transpose({1,2})) -- batchsize x seqlen
+    YdNer = nn.ConcatTable():add(Yd):add(Ner)
+    Entity = nn.Sequential()
+      :add(nn.MaskExtraction(2, opt.entity)) -- batch x entity x hidsize
+      :add(nn.Bottle(nn.MaskZero(nn.Sequential()
+        :add(nn.Linear(opt.hiddensize[#opt.hiddensize] * 2, opt.entitysize))
+        :add(nn.LogSoftMax()), 1)))
+      :add(nn.View(opt.batchsize * opt.entity, opt.entitysize))
+
     U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
+    nng_YdNer = YdNer(x_inp):annotate({name = 'YdNer', description = 'Yd Ner'})
+    
+    -- predict ner 
+    nng_Entity = Entity(nng_YdNer):annotate({name = 'Entity', description = 'Entity'})
 
-    nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+    -- predict answer
+    nng_Yd = nn.SelectTable(1)(nng_YdNer):annotate({name = 'Yd', description = 'memory embeddings'})
     nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
 
     Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
     nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
-    lm = nn.gModule({x_inp}, {nng_YdU})
+
+    lm = nn.gModule({x_inp}, {nng_YdU, nng_Entity})
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
@@ -516,6 +534,8 @@ function build_model()
     end
 
     attention_layer = nn.SoftMax() -- to be applied with some mask
+    attention_ner = nn.SoftMax() -- for ner prediction
+    crit_ner = nn.MaskZeroCriterion(nn.ClassNLLCriterion(None, None, 0), 1) -- ignore zero label and zero input rows
   end
 
   if opt.profile then
@@ -532,6 +552,8 @@ function build_model()
   if opt.cuda then
     lm:cuda()
     attention_layer:cuda()
+    attention_ner:cuda()
+    crit_ner:cuda()
   end
 end
 
@@ -608,9 +630,14 @@ function train(params, grad_params, epoch)
   local all_batches = torch.range(1, num_examples, opt.batchsize)
   local nbatches = all_batches:size(1)
   local randind = epoch == 1 and torch.range(1,nbatches) or torch.randperm(nbatches)
-  local grad_outputs = torch.zeros(opt.batchsize, 100) -- preallocate
+
+  grad_outputs = grad_outputs and grad_outputs or torch.zeros(opt.batchsize, 100) -- preallocate
+  grad_ner = grad_ner and grad_ner or torch.zeros(opt.batchsize * opt.entity, opt.entitysize) -- preallocate
+  ner_labels = ner_labels and ner_labels or torch.zeros(opt.batchsize * opt.entity):long()
+
   if opt.cuda then
     grad_outputs = grad_outputs:cuda()
+    grad_ner = grad_ner:cuda()
   end
 
   print('Total # of batches: ' .. nbatches)
@@ -625,6 +652,29 @@ function train(params, grad_params, epoch)
     local a = torch.Timer()
     local inputs, answers, answer_inds, line_nos = loadData(data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, 
       data.train_location, false, all_batches[randind[ir]])
+    
+    local context_input = inputs[1][1]
+    local ner_input = inputs[1][3] -- seqlen x batchsize
+
+    ner_labels:zero()
+    local speaker_to_index = {}
+    local num_speakers = 0
+    local ner_index = 0
+    for bs = 1, ner_input:size(2) do
+      for sl = 1, ner_input:size(1) do
+        ner_index = ner_index + 1
+        if ner_input[s][b] == 2 then -- 2 = PERSON
+          local speaker_id = context_input[s][b]
+          if speaker_to_index[speaker_id] == None:
+            num_speakers = num_speakers + 1
+            speaker_to_index[speaker_id] = num_speakers
+          end
+          ner_labels[ner_index] = speaker_to_index[speaker_id]
+          ner_labels[ner_index] = ner_labels[ner_index] > opt.entitysize and 0 or ner_labels[ner_index]
+        end
+      end
+    end
+
     if opt.profile then
       print('Load training batch: ' .. a:time().real .. 's')
     end
@@ -636,24 +686,12 @@ function train(params, grad_params, epoch)
        grad_params:zero()
 
       -- forward
-      local outputs_pre = lm:forward(inputs)
-
-      -- if epoch > 1 then
-      --   -- print('outputs_pre')
-      --   -- print(outputs_pre)
-      --   -- print('outputs')
-      --   -- print(outputs)
-      --   print('topk_train')
-      --   print(topk_train:size())
-      --   print('randind[ir]')
-      --   print(randind[ir])
-      --   -- print('topk_train[randind[ir]]')
-      --   -- print(topk_train[randind[ir]])
-      --   -- outputs_pre:foo()
-      -- end
+      local outputs_joint = lm:forward(inputs)
+      local outputs_pre = outputs_joint[1]
+      local outputs_ner = outputs_joint[2]
 
       local previous_topk = topk_train and topk_train[randind[ir]] or nil
-      local outputs = mask_attention(inputs[1][1], outputs_pre, previous_topk)
+      local outputs = mask_attention(context_input, outputs_pre, previous_topk)
 
       if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
         -- print('inputs')
@@ -700,6 +738,7 @@ function train(params, grad_params, epoch)
       end
 
       grad_outputs:resize(opt.batchsize, outputs:size(2)):zero()
+      grad_ner:zero()
 
       -- compute attention sum, loss & gradients
       local a = torch.Timer()
@@ -722,6 +761,9 @@ function train(params, grad_params, epoch)
         print('Compute attention sum: ' .. a:time().real .. 's')
       end
       sumErr = sumErr + err / opt.batchsize
+
+      -- compute ner loss
+      sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels)
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() .. 
@@ -754,10 +796,12 @@ function train(params, grad_params, epoch)
 
       -- backward 
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
-      mask_attention_gradients(inputs[1][1], grad_outputs, previous_topk)
+      mask_attention_gradients(context_input, grad_outputs, previous_topk)
+
+      grad_ner = crit_ner:backward(outputs_ner, ner_labels)
 
       lm:zeroGradParameters()
-      lm:backward(inputs, grad_outputs)
+      lm:backward(inputs, {grad_outputs, grad_ner})
       
       -- update
       if opt.cutoff > 0 then
@@ -813,7 +857,7 @@ function validate(ntrial, epoch)
 
     local inputs = valid_con
     local answer_inds = valid_ans_ind
-    local outputs = mask_attention(inputs[1][1], lm:forward(inputs), topk_valid and topk_valid[all_batches[i]] or nil)
+    local outputs = mask_attention(inputs[1][1], lm:forward(inputs)[1], topk_valid and topk_valid[all_batches[i]] or nil)
     local err = 0
     for ib = 1, opt.batchsize do
       if valid_ans[ib] > 0 and puncs[valid_ans[ib]] == nil and stopwords[valid_ans[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers

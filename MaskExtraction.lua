@@ -26,7 +26,12 @@ function MaskExtraction:updateOutput(input)
     local extracted = 1
     for s = 1, seqlen do
       if mask[b][s] == self.maskValue then
-        self.output[b][extracted] = data[b][s]
+        if s > 1 then
+          self.output[b][extracted][{{1, hidsize / 2}}] = data[b][s - 1][{{1, hidsize / 2}}] -- previous token forward
+        end
+        if s < seqlen then
+          self.output[b][extracted][{{hidsize / 2 + 1, hidsize}}] = data[b][s + 1][{{hidsize / 2 + 1, hidsize}}] -- next token backward
+        end
         if extracted == self.numExtract then
           break
         end
@@ -57,7 +62,12 @@ function MaskExtraction:updateGradInput(input, gradOutput)
     local extracted = 1
     for s = 1, seqlen do
       if mask[b][s] == self.maskValue then
-        self.gradInput[1][b][s] = gradOutput[b][extracted]
+        if s > 1 then
+          self.gradInput[1][b][s - 1][{{1, hidsize / 2}}] = gradOutput[b][extracted][{{1, hidsize / 2}}]
+        end
+        if s < seqlen then
+          self.gradInput[1][b][s + 1][{{hidsize / 2 + 1, hidsize}}] = gradOutput[b][extracted][{{hidsize / 2 + 1, hidsize}}]
+        end
         if extracted == self.numExtract then
           break
         end

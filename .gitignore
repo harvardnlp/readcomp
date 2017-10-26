@@ -11,5 +11,5 @@ test*
 models
 results
 sftp*.json
-debug.tsv
+debug*.tsv
 training.log
