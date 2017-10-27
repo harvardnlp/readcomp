@@ -26,8 +26,8 @@ cmd:text('Options:')
 -- training
 cmd:option('--model', 'asr', 'type of models to train, acceptable values: {crf, asr ,ga}')
 cmd:option('--topk', 5, 'number of top predictions to narrow to in the next iteration')
-cmd:option('--entity', 5, 'number of entities to extract')
-cmd:option('--entitysize', 10, 'number of entities for prediction')
+cmd:option('--entity', 10, 'number of entities to extract, these could be duplicate')
+cmd:option('--entitysize', 10, 'number of distinct entities for prediction')
 cmd:option('--adamconfig', '{0.9, 0.999}', 'ADAM hyperparameters beta1 and beta2')
 cmd:option('--cutoff', 10, 'max l2-norm of concatenation of all gradParam tensors')
 cmd:option('--cuda', false, 'use CUDA')
@@ -280,6 +280,7 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent,
 
   if opt.cuda then
     context_extr = context_extr:cuda()
+    context_ner = context_ner:cuda()
   end
 
   contexts = { {context, context_post, context_ner, context_sid, context_sent, context_spee}, context_extr}
@@ -633,7 +634,7 @@ function train(params, grad_params, epoch)
 
   grad_outputs = grad_outputs and grad_outputs or torch.zeros(opt.batchsize, 100) -- preallocate
   grad_ner = grad_ner and grad_ner or torch.zeros(opt.batchsize * opt.entity, opt.entitysize) -- preallocate
-  ner_labels = ner_labels and ner_labels or torch.zeros(opt.batchsize * opt.entity):long()
+  ner_labels = ner_labels and ner_labels or torch.zeros(opt.batchsize, opt.entity):long()
 
   if opt.cuda then
     grad_outputs = grad_outputs:cuda()
@@ -657,23 +658,28 @@ function train(params, grad_params, epoch)
     local ner_input = inputs[1][3] -- seqlen x batchsize
 
     ner_labels:zero()
-    local speaker_to_index = {}
-    local num_speakers = 0
-    local ner_index = 0
     for bs = 1, ner_input:size(2) do
+      local speaker_to_index = {}
+      local num_distinct_speakers = 0
+      local num_speakers = 0
       for sl = 1, ner_input:size(1) do
-        ner_index = ner_index + 1
-        if ner_input[s][b] == 2 then -- 2 = PERSON
-          local speaker_id = context_input[s][b]
-          if speaker_to_index[speaker_id] == None:
-            num_speakers = num_speakers + 1
-            speaker_to_index[speaker_id] = num_speakers
+        if ner_input[sl][bs] == 2 then -- 2 = PERSON
+          num_speakers = num_speakers + 1
+          if num_speakers <= opt.entity then
+            local speaker_id = context_input[sl][bs]
+            if speaker_to_index[speaker_id] == None then
+              num_distinct_speakers = num_distinct_speakers + 1
+              speaker_to_index[speaker_id] = num_distinct_speakers
+            end
+            local speaker_index = speaker_to_index[speaker_id]
+            speaker_index = speaker_index > opt.entitysize and 0 or speaker_index
+            ner_labels[bs][num_speakers] = speaker_index
           end
-          ner_labels[ner_index] = speaker_to_index[speaker_id]
-          ner_labels[ner_index] = ner_labels[ner_index] > opt.entitysize and 0 or ner_labels[ner_index]
         end
       end
     end
+
+    -- print(ner_labels:min() .. ' ..... ' .. ner_labels:max())
 
     if opt.profile then
       print('Load training batch: ' .. a:time().real .. 's')
@@ -689,6 +695,29 @@ function train(params, grad_params, epoch)
       local outputs_joint = lm:forward(inputs)
       local outputs_pre = outputs_joint[1]
       local outputs_ner = outputs_joint[2]
+
+
+      -- print('context_input:size()')
+      -- print(context_input:size())
+      -- print('ner_input:size()')
+      -- print(ner_input:size())
+      -- for bb = 1, opt.batchsize do
+      --   print('bb')
+      --   print(bb)
+      --   print('context_input:t()[bb][ner_input:t()[bb]:long():eq(2)]')
+      --   print(context_input:t()[bb][ner_input:t()[bb]:long():eq(2)])
+      -- end
+      -- print('ner_input:t():eq(2):sum(2)')
+      -- print(ner_input:t():eq(2):sum(2))
+      -- print('ner_labels:view(opt.batchsize, opt.entity)')
+      -- print(ner_labels:view(opt.batchsize, opt.entity))
+      -- print('outputs_ner')
+      -- print(outputs_ner)
+      -- ner_input:foo()
+
+
+
+
 
       local previous_topk = topk_train and topk_train[randind[ir]] or nil
       local outputs = mask_attention(context_input, outputs_pre, previous_topk)
@@ -763,7 +792,7 @@ function train(params, grad_params, epoch)
       sumErr = sumErr + err / opt.batchsize
 
       -- compute ner loss
-      sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels)
+      sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() .. 
@@ -798,7 +827,7 @@ function train(params, grad_params, epoch)
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
       mask_attention_gradients(context_input, grad_outputs, previous_topk)
 
-      grad_ner = crit_ner:backward(outputs_ner, ner_labels)
+      grad_ner = crit_ner:backward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
 
       lm:zeroGradParameters()
       lm:backward(inputs, {grad_outputs, grad_ner})
