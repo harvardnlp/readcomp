@@ -221,8 +221,8 @@ def main(arguments):
       f['post_vocab_size']  = np.array([len(corpus.dictionary.post2idx)])
       f['ner_vocab_size']  = np.array([len(corpus.dictionary.ner2idx)])
 
-      f['def_data']         = np.array(corpus.definition['data'])
-      f['def_location']     = np.array(corpus.definition['location'])
+      # f['def_data']         = np.array(corpus.definition['data'])
+      # f['def_location']     = np.array(corpus.definition['location'])
 
       f['train_data']       = np.array(corpus.train['data'])
       f['train_post']       = np.array(corpus.train['post'])
