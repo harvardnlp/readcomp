@@ -901,8 +901,6 @@ function validate(ntrial, epoch)
 
   -- early-stopping
   if validloss < xplog.minvalloss then
-    print("Processing test set")
-    test_model()
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch 
@@ -1007,9 +1005,6 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   train(params, grad_params, epoch)
   validate(ntrial, epoch)
 
-  -- print("Processing test set")
-  -- test_model()
-
   print("Processing train set")
   test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
 
@@ -1017,3 +1012,6 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   activate_topk = true
 
 end
+
+print("Processing test set using best model")
+test_model(paths.concat(opt.savepath, opt.id..'.t7'))
