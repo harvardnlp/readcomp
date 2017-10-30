@@ -920,7 +920,8 @@ function validate(ntrial, epoch)
 
   -- early-stopping
   if validloss < xplog.minvalloss then
-    -- test_model()
+    print("Processing test set")
+    test_model()
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch 
@@ -1025,13 +1026,10 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("Epoch #"..epoch.." :")
 
   train(params, grad_params, epoch)
-  -- validate(ntrial, epoch)
+  validate(ntrial, epoch)
 
-  -- print("Processing validation set")
-  -- test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
-
-  print("Processing test set")
-  test_model()
+  -- print("Processing test set")
+  -- test_model()
 
   print("Processing train set")
   test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, data.train_location)
