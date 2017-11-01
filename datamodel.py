@@ -87,28 +87,28 @@ class Dictionary(object):
         self.ner2idx[parts[0]] = int(parts[1])
 
 
-  def create_definition(self):
-    defdata = { "word": [], "def": [], "offsets": [], "length": [] }
+  # def create_definition(self):
+  #   defdata = { "word": [], "def": [], "offsets": [], "length": [] }
     
-    for word in self.word2idx:
-      defdata["word"].append(self.word2idx[word])
-      defdata["offsets"].append(len(defdata["def"]) + 1)
+  #   for word in self.word2idx:
+  #     defdata["word"].append(self.word2idx[word])
+  #     defdata["offsets"].append(len(defdata["def"]) + 1)
 
-      word_syn = wn.synsets(word)
-      if len(word_syn) > 0:
-        word_def = word_syn[0].definition()
-        word_def_tok = nltk.word_tokenize(word_def)
-        tokens = [self.word2idx[w] if w in self.word2idx else self.word2idx[UNKNOWN] for w in word_def_tok]
-        defdata["def"].extend(tokens)
-        defdata["length"].append(len(tokens))
-      else:
-        defdata["def"].append(0)
-        defdata["length"].append(1)
+  #     word_syn = wn.synsets(word)
+  #     if len(word_syn) > 0:
+  #       word_def = word_syn[0].definition()
+  #       word_def_tok = nltk.word_tokenize(word_def)
+  #       tokens = [self.word2idx[w] if w in self.word2idx else self.word2idx[UNKNOWN] for w in word_def_tok]
+  #       defdata["def"].extend(tokens)
+  #       defdata["length"].append(len(tokens))
+  #     else:
+  #       defdata["def"].append(0)
+  #       defdata["length"].append(1)
 
-    loc = np.array([np.array(defdata['offsets']), np.array(defdata['length']), np.array(defdata['word'])]).T
-    loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
+  #   loc = np.array([np.array(defdata['offsets']), np.array(defdata['length']), np.array(defdata['word'])]).T
+  #   loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
 
-    return { 'data': defdata['def'], 'location': loc }
+  #   return { 'data': defdata['def'], 'location': loc }
 
 
 class Corpus(object):
@@ -116,8 +116,6 @@ class Corpus(object):
     self.args_verbose_level = args_verbose_level
     self.context_target_separator = context_target_separator # special separator token to identify context and target
     self.answer_identifier = answer_identifier
-    self.max_sentence_number = 0
-    self.max_speech_number = 0
     self.dictify(vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file)
 
 
@@ -194,7 +192,7 @@ class Corpus(object):
     # print_msg('Loading analysis data...', 1, self.args_verbose_level)
     # self.analysis = self.tokenize(os.path.join(path, analysis), training = False)
     # print_msg('Loading wordnet definition data...', 1, self.args_verbose_level)
-    self.definition = self.dictionary.create_definition()
+    # self.definition = self.dictionary.create_definition()
 
     print_msg('\nTraining Data Statistics:\n', 1, self.args_verbose_level)
     train_context_length = self.train['location'][:,1]
@@ -222,9 +220,6 @@ class Corpus(object):
       'data': [], # token ids for each word in the corpus 
       'post': [], # pos tags 
       'ner': [], # ner tags 
-      'speaker_id': [], # speaker id 
-      'sentence': [], # sentence numbers 
-      'speech': [], # speech numbers 
       'extr': [], # extra features, such as frequency of token in the context, whether previous bi-gram of token match with that of the answer etc...
       'offsets': [], # offset locations for each line in the final 1-d data array 
       'context_length': [], # count of words in the context
@@ -233,7 +228,7 @@ class Corpus(object):
 
     self.tokenize_file(path, data, training)
 
-    sorted_data = { 'data': data['data'], 'post': data['post'], 'ner': data['ner'], 'sid': data['speaker_id'], 'sentence': data['sentence'], 'speech': data['speech'], 'extr': data['extr'] }
+    sorted_data = { 'data': data['data'], 'post': data['post'], 'ner': data['ner'], 'extr': data['extr'] }
 
     loc = np.array([np.array(data['offsets']), np.array(data['context_length']), np.array(data['line_number'])]).T
     loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
@@ -302,9 +297,6 @@ class Corpus(object):
         
         words = [word if word in self.dictionary.word2idx else UNKNOWN for word in words]
 
-        sentence_number = 1
-        speech_number = 1 # if not in speech/conversation use 1
-        in_speech = False
         extr_word_freq = {}
         
         ner_names = []
@@ -322,31 +314,12 @@ class Corpus(object):
 
           pos_tag = pos_tags[i]
           ner_tag = groups[i][1]
-          speaker_id = groups[i][2]
-
-          if ner_tag == "PERSON" and i < len(words) - 1:
-            ner_names.append((word, i, sentence_number))
 
           data['post'].append(self.dictionary.add_pos_tag(pos_tag))
           data['ner'].append(self.dictionary.add_ner_tag(ner_tag))
-          data['speaker_id'].append(self.dictionary.add_word(speaker_id) if speaker_id is not None else 0)
-          data['sentence'].append(sentence_number)
-          data['speech'].append(speech_number if in_speech else 1)
-
-          if word == '.' or (word =="''" and i > 0 and words[i - 1] == '.'):
-            sentence_number += 1
-
-          if word == "``":
-            in_speech = True
-            speech_number += 1
-          elif word == "''":
-            in_speech = False
 
           self.dictionary.update_count(word)
 
-        self.max_sentence_number = max(self.max_sentence_number, sentence_number)
-        self.max_speech_number = max(self.max_speech_number, speech_number)
-        
         for i in range(len(words)):
           word = words[i]
 
@@ -387,26 +360,8 @@ class Corpus(object):
               if i > 3 and words[i - 3] == words[num_words - 4] and words[i - 2] == words[num_words - 3] and words[i - 1] == words[num_words - 2]:
                 bigram_match = 1.5
 
-          ner_last3names = 0
-          ner_inlastsent = 0
-          ner_sameasnext = 0
-          ner_sameaslast = 0
-          for j in range(len(ner_names)):
-            nern = ner_names[j]
-            if nern[1] == i:
-              ner_last3names = 1 if j >= len(ner_names) - 3 else 0
-              ner_inlastsent = 1 if nern[2] == sentence_number else 0 # whether this name is in the last sentence
-              ner_sameaslast = 1 if j > 0 and nern[0] == ner_names[j-1][0] else 0
-              ner_sameasnext = 1 if j < len(ner_names) - 1 and nern[0] == ner_names[j + 1][0] else 0
-              break
-
           extra_features.append(freq)
           extra_features.append(bigram_match)
-
-          extra_features.append(ner_last3names)
-          extra_features.append(ner_inlastsent)
-          extra_features.append(ner_sameasnext)
-          extra_features.append(ner_sameaslast)
 
           data['extr'].append(np.array(extra_features))
 
