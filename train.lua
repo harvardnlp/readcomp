@@ -43,7 +43,8 @@ cmd:option('--silent', false, 'don\'t print anything to stdout')
 cmd:option('--lr', 0.001, 'learning rate')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
--- rnn layer 
+cmd:option('--rescale_attn', false, 'rescale attention scores by sqrt(dim)')
+-- rnn layer
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--postsize', 80, 'size of pos_tag embeddings')
 cmd:option('--nersize', 20, 'size of pos_tag embeddings')
@@ -79,9 +80,9 @@ end
 torch.manualSeed(opt.randomseed)
 
 if opt.cuda then -- do this before building model to prevent segfault
-  require 'cunn' 
+  require 'cunn'
   cutorch.setDevice(opt.device)
-end 
+end
 
 local xplog, lm
 if opt.continue ~= '' then
@@ -139,10 +140,10 @@ function test_answer_in_context(tensor_data, tensor_location, sample)
     local target_backward = torch.LongTensor(max_target_length, opt.batchsize):zero()
     local answer = torch.LongTensor(opt.batchsize):zero()
     local answer_ind = {}
-    
+
     for idx = 1, opt.batchsize do
       answer_ind[idx] = {}
-      local iexample = batch_start + idx - 1  
+      local iexample = batch_start + idx - 1
       if iexample <= num_examples then
         local cur_offset = tensor_location[iexample][1]
         local cur_context_length = tensor_location[iexample][2]
@@ -151,7 +152,7 @@ function test_answer_in_context(tensor_data, tensor_location, sample)
         local cur_context = tensor_data[{{cur_offset, cur_offset + cur_context_length - 1}}]
         local cur_target  = tensor_data[{{cur_offset + cur_context_length, cur_offset + cur_context_length + cur_target_length - 2}}]
         local cur_answer  = tensor_data[cur_offset + cur_context_length + cur_target_length - 1]
-        
+
         context[{{max_context_length - cur_context:size(1) + 1, max_context_length}, idx}] = cur_context
         target_forward [{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target
         target_backward[{{max_target_length - cur_target:size(1) + 1, max_target_length}, idx}] = cur_target:index(1, torch.linspace(cur_target:size(1), 1, cur_target:size(1)):long()) -- reverse order
@@ -195,7 +196,7 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_extr, tensor_loca
   local answer_ind = {}
   for idx = 1, opt.batchsize do
     answer_ind[idx] = {}
-    local iexample = batch_index + idx - 1  
+    local iexample = batch_index + idx - 1
     if iexample <= num_examples then
       local cur_offset = tensor_location[iexample][1]
       local cur_context_length = tensor_location[iexample][2]
@@ -289,7 +290,11 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
       batch_size = metadata.opt.batchsize
       model = metadata.model
       puncs = metadata.puncs -- punctuations
-      attention_layer = nn.SoftMax()
+      if metadata.opt.rescale_attn then
+        attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*metadata.opt.hiddensize))):add(nn.SoftMax())
+      else
+        attention_layer = nn.SoftMax() -- to be applied with some mask
+      end
       if opt.cuda then
         attention_layer:cuda()
       end
@@ -485,8 +490,8 @@ function build_model()
 
     x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     nng_YdNer = YdNer(x_inp):annotate({name = 'YdNer', description = 'Yd Ner'})
-    
-    -- predict ner 
+
+    -- predict ner
     nng_Entity = Entity(nng_YdNer):annotate({name = 'Entity', description = 'Entity'})
 
     -- predict answer
@@ -516,7 +521,11 @@ function build_model()
       lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
     end
 
-    attention_layer = nn.SoftMax() -- to be applied with some mask
+    if opt.rescale_attn then
+      attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*opt.hiddensize))):add(nn.SoftMax())
+    else
+      attention_layer = nn.SoftMax() -- to be applied with some mask
+    end
     attention_ner = nn.SoftMax() -- for ner prediction
     crit_ner = nn.MaskZeroCriterion(nn.ClassNLLCriterion(None, None, 0), 1) -- ignore zero label and zero input rows
   end
@@ -633,9 +642,9 @@ function train(params, grad_params, epoch)
   -- for ir = 1,1 do
   for ir = 1,nbatches do
     local a = torch.Timer()
-    local inputs, answers, answer_inds, line_nos = loadData(data.train_data, data.train_post, data.train_ner, data.train_extr, 
+    local inputs, answers, answer_inds, line_nos = loadData(data.train_data, data.train_post, data.train_ner, data.train_extr,
       data.train_location, false, all_batches[randind[ir]])
-    
+
     local context_input = inputs[1][1]
     local ner_input = inputs[1][3] -- seqlen x batchsize
 
@@ -710,7 +719,7 @@ function train(params, grad_params, epoch)
         -- print('targets')
         -- print(targets[1][{{},2}]:contiguous():view(1,-1))
         -- print(targets[2][{{},2}]:contiguous():view(1,-1))
-        
+
         for inode,node in ipairs(lm.forwardnodes) do
           -- if node.data.annotations.name == 'Yd' then
           --   print(node.data.annotations.name)
@@ -777,10 +786,10 @@ function train(params, grad_params, epoch)
       sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
 
       if opt.verbose then
-        print('grad_outputs: min = ' .. grad_outputs:min() .. 
-          ', max = ' .. grad_outputs:max() .. 
-          ', mean = ' .. grad_outputs:mean() .. 
-          ', std = ' .. grad_outputs:std() .. 
+        print('grad_outputs: min = ' .. grad_outputs:min() ..
+          ', max = ' .. grad_outputs:max() ..
+          ', mean = ' .. grad_outputs:mean() ..
+          ', std = ' .. grad_outputs:std() ..
           ', nnz = ' .. grad_outputs[grad_outputs:ne(0)]:size(1) .. ' / ' ..  grad_outputs:numel() .. ' ....................................')
 
         if grad_outputs:mean() ~= grad_outputs:mean() then -- nan value
@@ -805,7 +814,7 @@ function train(params, grad_params, epoch)
         end
       end
 
-      -- backward 
+      -- backward
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
       mask_attention_gradients(context_input, grad_outputs, previous_topk)
 
@@ -813,7 +822,7 @@ function train(params, grad_params, epoch)
 
       lm:zeroGradParameters()
       lm:backward(inputs, {grad_outputs, grad_ner})
-      
+
       -- update
       if opt.cutoff > 0 then
         local norm = lm:gradParamClip(opt.cutoff) -- affects gradParams
@@ -833,7 +842,7 @@ function train(params, grad_params, epoch)
       collect_track_garbage()
     end
   end
-  
+
   collect_track_garbage()
 
   if not opt.silent then
@@ -863,7 +872,7 @@ function validate(ntrial, epoch)
 
   -- for i = 1, 1 do
   for i = 1, nvalbatches do
-    local valid_con, valid_ans, valid_ans_ind, valid_lineno = loadData(data.valid_data, data.valid_post, data.valid_ner, data.valid_extr, 
+    local valid_con, valid_ans, valid_ans_ind, valid_lineno = loadData(data.valid_data, data.valid_post, data.valid_ner, data.valid_extr,
       data.valid_location, false, all_batches[i])
 
     local inputs = valid_con
@@ -905,7 +914,7 @@ function validate(ntrial, epoch)
     print("Found new validation minima")
     -- save best version of model
     xplog.minvalloss = validloss
-    xplog.epoch = epoch 
+    xplog.epoch = epoch
     local filename = paths.concat(opt.savepath, opt.id..'.t7')
     if not opt.dontsave then
       print("Found new minima. Saving to "..filename)
@@ -964,8 +973,8 @@ if data.word_embeddings then
   opt.inputsize = data.word_embeddings:size(2)
 end
 
-if not opt.silent then 
-  print("Vocabulary size : "..vocab_size) 
+if not opt.silent then
+  print("Vocabulary size : "..vocab_size)
   print("Using batch size of "..opt.batchsize)
 end
 
