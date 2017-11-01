@@ -291,7 +291,8 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
       model = metadata.model
       puncs = metadata.puncs -- punctuations
       if metadata.opt.rescale_attn then
-        attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*metadata.opt.hiddensize))):add(nn.SoftMax())
+        local tophiddensize = metadata.opt.hiddensize[#metadata.opt.hiddensize]
+        attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*tophiddensize))):add(nn.SoftMax())
       else
         attention_layer = nn.SoftMax() -- to be applied with some mask
       end
@@ -522,7 +523,8 @@ function build_model()
     end
 
     if opt.rescale_attn then
-      attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*opt.hiddensize))):add(nn.SoftMax())
+      local tophiddensize = opt.hiddensize[#opt.hiddensize]
+      attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*tophiddensize))):add(nn.SoftMax())
     else
       attention_layer = nn.SoftMax() -- to be applied with some mask
     end
