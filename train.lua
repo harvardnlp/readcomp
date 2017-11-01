@@ -282,8 +282,9 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     model = lm
     model_file = saved_model_file and saved_model_file or paths.concat(opt.savepath, opt.id..'.t7')
 
-    if not lm then
+    if not lm or saved_model_file then
       -- load model for computing accuracy & perplexity for target answers
+      print('loading model ' .. model_file)
       metadata = torch.load(model_file)
       batch_size = metadata.opt.batchsize
       model = metadata.model
