@@ -1009,9 +1009,9 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("Processing train set")
   test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
 
-  print("Processing test set")
-  test_model()
-
   epoch = epoch + 1
   activate_topk = true
 end
+
+print("Processing test set using best model on validation")
+test_model(paths.concat(opt.savepath, opt.id..'.t7'))
