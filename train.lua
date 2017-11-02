@@ -1001,7 +1001,13 @@ function validate(ntrial, epoch)
 
     local inputs = valid_con
     local answer_inds = valid_ans_ind
-    local outputs = mask_attention(inputs[1][1], lm:forward(inputs)[1], topk_valid and topk_valid[all_batches[i]] or nil)
+    local outpre
+    if opt.ent_feats and opt.multitask then
+      outpre = lm:forward(inputs)[1]
+    else
+      outpre = lm:forward(inputs)
+    end
+    local outputs = mask_attention(inputs[1][1], outpre, topk_valid and topk_valid[all_batches[i]] or nil)
     local err = 0
     for ib = 1, opt.batchsize do
       if valid_ans[ib] > 0 and puncs[valid_ans[ib]] == nil and stopwords[valid_ans[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers
