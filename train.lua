@@ -503,10 +503,18 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
     lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
     -- QUESTION: I assume the lookup below's parameters get unshared at cuda'ing anyway, right?
     lookup_sid  = lookup_text:clone('weight','gradWeight','bias','gradBias')
-    lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
-    lookup_ner  = nn.LookupTableMaskZero(ner_vocab_size,  in_ner_size)
-    lookup_sent = nn.LookupTableMaskZero(sent_vocab_size, in_sent_size)
-    lookup_spee = nn.LookupTableMaskZero(spee_vocab_size, in_spee_size)
+    if args.std_feats then
+      lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
+    end
+    if args.ent_feats then
+      lookup_ner  = nn.LookupTableMaskZero(ner_vocab_size,  in_ner_size)
+    end
+    if args.disc_feats then
+      lookup_sent = nn.LookupTableMaskZero(sent_vocab_size, in_sent_size)
+    end
+    if args.speaker_feats then
+      lookup_spee = nn.LookupTableMaskZero(spee_vocab_size, in_spee_size)
+    end
 
     lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
     lookup_post.maxnormout = -1
@@ -1074,11 +1082,15 @@ for i = 1, data.stopwords:size(1) do
 end
 
 vocab_size = data.vocab_size[1]
-post_vocab_size = data.post_vocab_size[1]
-ner_vocab_size  = data.ner_vocab_size [1]
-sent_vocab_size = data.sent_vocab_size[1]
-spee_vocab_size = data.spee_vocab_size[1]
-extr_size = data.train_extr:size(2)
+post_vocab_size = args.std_feats and data.post_vocab_size[1] or -1
+ner_vocab_size  = args.ent_feats and data.ner_vocab_size [1] or -1
+sent_vocab_size = args.disc_feats and data.sent_vocab_size[1] or -1
+spee_vocab_size = args.speaker_feats and data.spee_vocab_size[1] or -1
+if args.std_feats or args.ent_feats then
+  extr_size = data.train_extr:size(2)
+else
+  extr_size = -1
+end
 
 -- store the top-k predictions to be used at the next epoch
 topk_train = nil
