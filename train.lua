@@ -795,8 +795,13 @@ function train(params, grad_params, epoch)
 
       -- forward
       local outputs_joint = lm:forward(inputs)
-      local outputs_pre = outputs_joint[1]
-      local outputs_ner = outputs_joint[2]
+      local outputs_pre, outputs_ner
+      if opt.ent_feats and opt.multitask then
+        outputs_pre = outputs_joint[1]
+        outputs_ner = outputs_joint[2]
+      else
+        outputs_pre = outputs_joint
+      end
 
 
       -- print('context_input:size()')
@@ -939,7 +944,7 @@ function train(params, grad_params, epoch)
       if opt.ent_feats and opt.multitask then
         lm:backward(inputs, {grad_outputs, grad_ner})
       else
-        lm:backward(inputs, {grad_outputs})
+        lm:backward(inputs, grad_outputs)
       end
 
       -- update
