@@ -44,6 +44,7 @@ cmd:option('--lr', 0.001, 'learning rate')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 cmd:option('--rescale_attn', false, 'rescale attention scores by sqrt(dim)')
+cmd:option('--multitask', false, 'also predict speaker stuff') --TODO: add a coefficient
 -- rnn layer
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--postsize', 80, 'size of pos_tag embeddings')
@@ -572,32 +573,38 @@ end
 function build_model()
 
   if not lm then
+    x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize, opt.nersize, opt.sentsize, opt.speesize)
-    Ner = nn.Sequential():add(nn.SelectTable(1)):add(nn.SelectTable(3)):add(nn.Transpose({1,2})) -- batchsize x seqlen
-    YdNer = nn.ConcatTable():add(Yd):add(Ner)
-    Entity = nn.Sequential()
-      :add(nn.MaskExtraction(2, opt.entity)) -- batch x entity x hidsize
-      :add(nn.Bottle(nn.MaskZero(nn.Sequential()
-        :add(nn.Linear(opt.hiddensize[#opt.hiddensize] * 2, opt.entitysize))
-        :add(nn.LogSoftMax()), 1)))
-      :add(nn.View(opt.batchsize * opt.entity, opt.entitysize))
-
     U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
-    x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
-    nng_YdNer = YdNer(x_inp):annotate({name = 'YdNer', description = 'Yd Ner'})
+    if opt.ent_feats and opt.multitask then
+      local ner_stuff_idx = opt.std_feats and 3 or 2
+      Ner = nn.Sequential():add(nn.SelectTable(1)):add(nn.SelectTable(ner_stuff_idx)):add(nn.Transpose({1,2})) -- batchsize x seqlen
+      YdNer = nn.ConcatTable():add(Yd):add(Ner)
+      Entity = nn.Sequential()
+        :add(nn.MaskExtraction(2, opt.entity)) -- batch x entity x hidsize
+        :add(nn.Bottle(nn.MaskZero(nn.Sequential()
+          :add(nn.Linear(opt.hiddensize[#opt.hiddensize] * 2, opt.entitysize))
+          :add(nn.LogSoftMax()), 1)))
+        :add(nn.View(opt.batchsize * opt.entity, opt.entitysize))
+      nng_YdNer = YdNer(x_inp):annotate({name = 'YdNer', description = 'Yd Ner'})
+      -- predict ner
+      nng_Entity = Entity(nng_YdNer):annotate({name = 'Entity', description = 'Entity'})
+      -- predict answer
+      nng_Yd = nn.SelectTable(1)(nng_YdNer):annotate({name = 'Yd', description = 'memory embeddings'})
+    else
+      nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+    end
 
-    -- predict ner
-    nng_Entity = Entity(nng_YdNer):annotate({name = 'Entity', description = 'Entity'})
-
-    -- predict answer
-    nng_Yd = nn.SelectTable(1)(nng_YdNer):annotate({name = 'Yd', description = 'memory embeddings'})
     nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
-
     Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
     nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
 
-    lm = nn.gModule({x_inp}, {nng_YdU, nng_Entity})
+    if opt.ent_feats and opt.multitask then
+      lm = nn.gModule({x_inp}, {nng_YdU, nng_Entity})
+    else
+      lm = nn.gModule({x_inp}, {nng_YdU})
+    end
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
@@ -750,23 +757,25 @@ function train(params, grad_params, epoch)
       ner_input = inputs[1][2]
     end
 
-    ner_labels:zero()
-    for bs = 1, ner_input:size(2) do
-      local speaker_to_index = {}
-      local num_distinct_speakers = 0
-      local num_speakers = 0
-      for sl = 1, ner_input:size(1) do
-        if ner_input[sl][bs] == 2 then -- 2 = PERSON
-          num_speakers = num_speakers + 1
-          if num_speakers <= opt.entity then
-            local speaker_id = context_input[sl][bs]
-            if speaker_to_index[speaker_id] == None then
-              num_distinct_speakers = num_distinct_speakers + 1
-              speaker_to_index[speaker_id] = num_distinct_speakers
+    if opt.ent_feats and opt.multitask then
+      ner_labels:zero()
+      for bs = 1, ner_input:size(2) do
+        local speaker_to_index = {}
+        local num_distinct_speakers = 0
+        local num_speakers = 0
+        for sl = 1, ner_input:size(1) do
+          if ner_input[sl][bs] == 2 then -- 2 = PERSON
+            num_speakers = num_speakers + 1
+            if num_speakers <= opt.entity then
+              local speaker_id = context_input[sl][bs]
+              if speaker_to_index[speaker_id] == None then
+                num_distinct_speakers = num_distinct_speakers + 1
+                speaker_to_index[speaker_id] = num_distinct_speakers
+              end
+              local speaker_index = speaker_to_index[speaker_id]
+              speaker_index = speaker_index > opt.entitysize and 0 or speaker_index
+              ner_labels[bs][num_speakers] = speaker_index
             end
-            local speaker_index = speaker_to_index[speaker_id]
-            speaker_index = speaker_index > opt.entitysize and 0 or speaker_index
-            ner_labels[bs][num_speakers] = speaker_index
           end
         end
       end
@@ -885,7 +894,9 @@ function train(params, grad_params, epoch)
       sumErr = sumErr + err / opt.batchsize
 
       -- compute ner loss
-      sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
+      if opt.ent_feats and opt.multitask then
+        sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
+      end
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..
@@ -920,10 +931,16 @@ function train(params, grad_params, epoch)
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
       mask_attention_gradients(context_input, grad_outputs, previous_topk)
 
-      grad_ner = crit_ner:backward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
+      if opt.ent_feats and opt.multitask then
+        grad_ner = crit_ner:backward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
+      end
 
       lm:zeroGradParameters()
-      lm:backward(inputs, {grad_outputs, grad_ner})
+      if opt.ent_feats and opt.multitask then
+        lm:backward(inputs, {grad_outputs, grad_ner})
+      else
+        lm:backward(inputs, {grad_outputs})
+      end
 
       -- update
       if opt.cutoff > 0 then
