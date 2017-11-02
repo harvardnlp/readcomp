@@ -56,7 +56,10 @@ cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cel
 cmd:option('--dropout', 0.1, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
 cmd:option('--datafile', 'lambada.hdf5', 'the preprocessed hdf5 data file')
-cmd:option('--features', '{}', 'any subset of {"std", "ent", "disc", "speaker"}')
+cmd:option('--std_feats', false, 'use standard features')
+cmd:option('--ent_feats', false, 'use entity features')
+cmd:option('--disc_feats', false, 'use discourse features')
+cmd:option('--speaker_feats', false, 'use speaker features')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 64, 'number of examples per batch')
 cmd:option('--savepath', 'models', 'path to directory where experiment log (includes model) will be saved')
@@ -73,19 +76,6 @@ cmd:text()
 local opt = cmd:parse(arg or {})
 opt.hiddensize = loadstring(" return "..opt.hiddensize)()
 opt.adamconfig = loadstring(" return "..opt.adamconfig)()
-feats_to_use = {}
-local opt_feats = loadstring(' return '..opt.features)()
-for ii, ff in ipairs(opt_feats) do
-  if string.find(ff, "std") then
-    opt.std_feats = true
-  elseif string.find(ff, "ent") then
-    opt.ent_feats = true
-  elseif string.find(ff, "disc") then
-    opt.disc_feats = true
-  elseif string.find(ff, "speaker") then
-    opt.speaker_feats = true
-  end
-end
 opt.inputsize = opt.inputsize == -1 and opt.hiddensize[1] or opt.inputsize
 opt.id = opt.id == '' and (paths.basename(opt.datafile, paths.extname(opt.datafile)) .. '-' .. opt.model) or opt.id
 opt.version = 6 -- better NCE bias initialization + new default hyper-params
@@ -529,31 +519,31 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
     local parlook = nn.ParallelTable():add(lookup_text)
     if opt.std_feats then
       parlook:add(lookup_post)
-      insize = insize + in_post_size
+      in_size = in_size + in_post_size
     end
     if opt.ent_feats then
       parlook:add(lookup_ner)
-      insize = insize + in_ner_size
+      in_size = in_size + in_ner_size
     end
     if opt.disc_feats then
       parlook:add(lookup_sent)
-      insize = insize + in_sent_size
+      in_size = in_size + in_sent_size
     end
     if opt.speaker_feats then
       parlook:add(lookup_sid)
       parlook:add(lookup_spee)
-      insize = insize + lookup_sid.weight:size(2) + in_spee_size
+      in_size = in_size + lookup_sid.weight:size(2) + in_spee_size
     end
     lookup:add(parlook):add(nn.JoinTable(3))
 
       -- :add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sid):add(lookup_sent):add(lookup_spee))
-      -- :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
+      -- :add(nn.JoinTable(3)) -- seqlen x batchsize x (in_size + in_post_size)
 
     if opt.std_feats or opt.ent_feats then
       featurizer = nn.Sequential()
         :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
         :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
-      insize = insize + extr_size
+      in_size = in_size + extr_size
     else
       featurizer = nn.Sequential():add(nn.SelectTable(1)):add(lookup)
     end
@@ -753,7 +743,12 @@ function train(params, grad_params, epoch)
       data.train_location, false, all_batches[randind[ir]])
 
     local context_input = inputs[1][1]
-    local ner_input = inputs[1][3] -- seqlen x batchsize
+    local ner_input
+    if opt.ent_feats and opt.std_feats then
+      ner_input = inputs[1][3] -- seqlen x batchsize
+    elseif opt.ent_feats then
+      ner_input = inputs[1][2]
+    end
 
     ner_labels:zero()
     for bs = 1, ner_input:size(2) do
