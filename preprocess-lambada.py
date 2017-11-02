@@ -281,7 +281,7 @@ def main(arguments):
         f['test_ner']         = np.array(corpus.test['ner'])
       if args.disc_feats:
         f['test_sentence']    = np.array(corpus.test['sentence'])
-      if args.std_feats or args.ent_feats:
+      if args.speaker_feats:
         f['test_sid']         = np.array(corpus.test['sid'])
         f['test_speech']      = np.array(corpus.test['speech'])
       if args.std_feats or args.ent_feats:
