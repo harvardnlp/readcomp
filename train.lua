@@ -404,7 +404,13 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     local inputs = tests_con
     local answer = tests_ans
     local in_words = inputs[1][1]
-    local outputs = mask_attention(in_words, model:forward(inputs)[1], topk_answers[i])
+    local outpre
+    if opt.ent_feats and opt.multitask then
+      outpre = model:forward(inputs)[1]
+    else
+      outpre = model:forward(inputs)
+    end
+    local outputs = mask_attention(in_words, outpre, topk_answers[i])
 
     local predictions = answer.new():resizeAs(answer):zero()
     local truth = {}
@@ -501,26 +507,25 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
     -- input layer (i.e. word embedding space)
     -- input is seqlen x batchsize, output is seqlen x batchsize x insize
     lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
+    lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
     -- QUESTION: I assume the lookup below's parameters get unshared at cuda'ing anyway, right?
     lookup_sid  = lookup_text:clone('weight','gradWeight','bias','gradBias')
-    if args.std_feats then
+    if opt.std_feats then
       lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
+      lookup_post.maxnormout = -1
     end
-    if args.ent_feats then
+    if opt.ent_feats then
       lookup_ner  = nn.LookupTableMaskZero(ner_vocab_size,  in_ner_size)
+      lookup_ner.maxnormout  = -1
     end
-    if args.disc_feats then
+    if opt.disc_feats then
       lookup_sent = nn.LookupTableMaskZero(sent_vocab_size, in_sent_size)
+      lookup_sent.maxnormout = -1
     end
-    if args.speaker_feats then
+    if opt.speaker_feats then
       lookup_spee = nn.LookupTableMaskZero(spee_vocab_size, in_spee_size)
+       lookup_spee.maxnormout = -1
     end
-
-    lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
-    lookup_post.maxnormout = -1
-    lookup_ner.maxnormout  = -1
-    lookup_sent.maxnormout = -1
-    lookup_spee.maxnormout = -1
 
 -- the order of cat_ctxs is {context, context_post, context_ner, context_sent, context_sid, context_spee}
 
@@ -1082,11 +1087,11 @@ for i = 1, data.stopwords:size(1) do
 end
 
 vocab_size = data.vocab_size[1]
-post_vocab_size = args.std_feats and data.post_vocab_size[1] or -1
-ner_vocab_size  = args.ent_feats and data.ner_vocab_size [1] or -1
-sent_vocab_size = args.disc_feats and data.sent_vocab_size[1] or -1
-spee_vocab_size = args.speaker_feats and data.spee_vocab_size[1] or -1
-if args.std_feats or args.ent_feats then
+post_vocab_size = opt.std_feats and data.post_vocab_size[1] or -1
+ner_vocab_size  = opt.ent_feats and data.ner_vocab_size [1] or -1
+sent_vocab_size = opt.disc_feats and data.sent_vocab_size[1] or -1
+spee_vocab_size = opt.speaker_feats and data.spee_vocab_size[1] or -1
+if opt.std_feats or opt.ent_feats then
   extr_size = data.train_extr:size(2)
 else
   extr_size = -1
