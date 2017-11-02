@@ -153,7 +153,7 @@ def main(arguments):
   global args
   parser = argparse.ArgumentParser(
       description=__doc__,
-      formatter_class=argparse.RawDescriptionHelpFormatter) 
+      formatter_class=argparse.RawDescriptionHelpFormatter)
   parser.add_argument('--data', type=str, default='~/Dropbox/Personal/Work/lambada-dataset/lambada-train-valid/original/',
                       help='location of the data corpus')
   parser.add_argument('--glove', type=str, default='', # e.g. data/glove.6B.100d.txt
@@ -182,6 +182,14 @@ def main(arguments):
                       help='separator token between context, query and answer, for CNN dataset use $$$')
   parser.add_argument('--answer_identifier', type=str, default='',
                       help='identifier for answer token in the query, for CNN dataset this is @placeholder')
+  parser.add_argument('--std_feats', action='store_true',
+                      help='include standard nlp features')
+  parser.add_argument('--ent_feats', action='store_true',
+                      help='include entity focused features')
+  parser.add_argument('--disc_feats', action='store_true',
+                      help='include discourse focused features')
+  parser.add_argument('--speaker_feats', action='store_true',
+                      help='include speaker focused features')
   parser.add_argument('--out_file', type=str, default='lambada.hdf5',
                       help='output hdf5 file')
   parser.add_argument('--debug_translate', type=str, default='',
@@ -198,7 +206,9 @@ def main(arguments):
   out_vocab_file_prefix = args.out_file.split('.')[0]
   start_time = time.time()
   if len(args.debug_translate) or args.validate:
-    corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None)
+    corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None,
+                              std_feats=args.std_feats, ent_feats=args.ent_feats,
+                              disc_feats=args.disc_feats, speaker_feats=args.speaker_feats)
     corpus.load_vocab(out_vocab_file_prefix)
     if args.validate:
       validate(corpus, args.out_file)
@@ -206,11 +216,17 @@ def main(arguments):
       debug_translate(corpus, args.out_file, args.debug_translate)
   else:
     if len(args.glove):
-      corpus = datamodel.Corpus(args.verbose_level, None, args.glove, args.glove_size, args.data + args.punctuations, 
-        args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None, args.context_query_separator, args.answer_identifier)
+      corpus = datamodel.Corpus(args.verbose_level, None, args.glove, args.glove_size, args.data + args.punctuations,
+                                args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None,
+                                args.context_query_separator, args.answer_identifier,
+                                std_feats=args.std_feats, ent_feats=args.ent_feats,
+                                disc_feats=args.disc_feats, speaker_feats=args.speaker_feats)
     else:
-      corpus = datamodel.Corpus(args.verbose_level, args.data + args.vocab, None, None, args.data + args.punctuations, 
-        args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None, args.context_query_separator, args.answer_identifier)
+      corpus = datamodel.Corpus(args.verbose_level, args.data + args.vocab, None, None, args.data + args.punctuations,
+                                args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None,
+                                args.context_query_separator, args.answer_identifier,
+                                std_feats=args.std_feats, ent_feats=args.ent_feats,
+                                disc_feats=args.disc_feats, speaker_feats=args.speaker_feats)
     corpus.load(args.data, args.train, args.valid, args.test, args.control, args.analysis)
     corpus.save(out_vocab_file_prefix)
 
@@ -218,28 +234,58 @@ def main(arguments):
       f['punctuations']     = np.array(corpus.punctuations) # punctuations are ignored during test time
       f['stopwords']        = np.array(corpus.stopwords) # punctuations are ignored during test time
       f['vocab_size']       = np.array([len(corpus.dictionary)])
-      f['post_vocab_size']  = np.array([len(corpus.dictionary.post2idx)])
-      f['ner_vocab_size']  = np.array([len(corpus.dictionary.ner2idx)])
+      if args.std_feats:
+        f['post_vocab_size']  = np.array([len(corpus.dictionary.post2idx)])
+      if args.ent_feats:
+        f['ner_vocab_size']  = np.array([len(corpus.dictionary.ner2idx)])
+      if args.disc_feats:
+        f['sent_vocab_size']  = np.array([corpus.max_sentence_number])
+      if args.speaker_feats:
+        f['spee_vocab_size']  = np.array([corpus.max_speech_number])
 
-      # f['def_data']         = np.array(corpus.definition['data'])
-      # f['def_location']     = np.array(corpus.definition['location'])
+      #f['def_data']         = np.array(corpus.definition['data'])
+      #f['def_location']     = np.array(corpus.definition['location'])
 
       f['train_data']       = np.array(corpus.train['data'])
-      f['train_post']       = np.array(corpus.train['post'])
-      f['train_ner']        = np.array(corpus.train['ner'])
-      f['train_extr']       = np.array(corpus.train['extr'])
+      if args.std_feats:
+        f['train_post']       = np.array(corpus.train['post'])
+      if args.ent_feats:
+        f['train_ner']        = np.array(corpus.train['ner'])
+      if args.disc_feats:
+        f['train_sentence']   = np.array(corpus.train['sentence'])
+      if args.speaker_feats:
+        f['train_sid']        = np.array(corpus.train['sid'])
+        f['train_speech']     = np.array(corpus.train['speech'])
+      if args.std_feats or args.ent_feats:
+        f['train_extr']       = np.array(corpus.train['extr'])
       f['train_location']   = np.array(corpus.train['location'])
 
       f['valid_data']       = np.array(corpus.valid['data'])
-      f['valid_post']       = np.array(corpus.valid['post'])
-      f['valid_ner']        = np.array(corpus.valid['ner'])
-      f['valid_extr']       = np.array(corpus.valid['extr'])
+      if args.std_feats:
+        f['valid_post']       = np.array(corpus.valid['post'])
+      if args.ent_feats:
+        f['valid_ner']        = np.array(corpus.valid['ner'])
+      if args.disc_feats:
+        f['valid_sentence']   = np.array(corpus.valid['sentence'])
+      if args.speaker_feats:
+        f['valid_sid']        = np.array(corpus.valid['sid'])
+        f['valid_speech']     = np.array(corpus.valid['speech'])
+      if args.std_feats or args.ent_feats:
+        f['valid_extr']       = np.array(corpus.valid['extr'])
       f['valid_location']   = np.array(corpus.valid['location'])
 
       f['test_data']        = np.array(corpus.test['data'])
-      f['test_post']        = np.array(corpus.test['post'])
-      f['test_ner']         = np.array(corpus.test['ner'])
-      f['test_extr']        = np.array(corpus.test['extr'])
+      if args.std_feats:
+        f['test_post']        = np.array(corpus.test['post'])
+      if args.ent_feats:
+        f['test_ner']         = np.array(corpus.test['ner'])
+      if args.disc_feats:
+        f['test_sentence']    = np.array(corpus.test['sentence'])
+      if args.std_feats or args.ent_feats:
+        f['test_sid']         = np.array(corpus.test['sid'])
+        f['test_speech']      = np.array(corpus.test['speech'])
+      if args.std_feats or args.ent_feats:
+        f['test_extr']        = np.array(corpus.test['extr'])
       f['test_location']    = np.array(corpus.test['location'])
 
       # f['control_data']     = np.array(corpus.control['data'])

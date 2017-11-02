@@ -48,12 +48,15 @@ cmd:option('--rescale_attn', false, 'rescale attention scores by sqrt(dim)')
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--postsize', 80, 'size of pos_tag embeddings')
 cmd:option('--nersize', 20, 'size of pos_tag embeddings')
+cmd:option('--sentsize', 30, 'size of sentence embeddings')
+cmd:option('--speesize', 30, 'size of speech embeddings')
 cmd:option('--hiddensize', '{128}', 'number of hidden units used at output of each recurrent layer. When more than one is specified, RNN/LSTMs/GRUs are stacked')
 cmd:option('--rnntype', 'gru', 'type of rnn to use for encoding context and query, acceptable values: rnn/lstm')
 cmd:option('--projsize', -1, 'size of the projection layer (number of hidden cell units for LSTMP)')
 cmd:option('--dropout', 0.1, 'ancelossy dropout with this probability after each rnn layer. dropout <= 0 disables it.')
 -- data
 cmd:option('--datafile', 'lambada.hdf5', 'the preprocessed hdf5 data file')
+cmd:option('--features', '{}', 'any subset of {"std", "ent", "disc", "speaker"}')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 64, 'number of examples per batch')
 cmd:option('--savepath', 'models', 'path to directory where experiment log (includes model) will be saved')
@@ -70,6 +73,19 @@ cmd:text()
 local opt = cmd:parse(arg or {})
 opt.hiddensize = loadstring(" return "..opt.hiddensize)()
 opt.adamconfig = loadstring(" return "..opt.adamconfig)()
+feats_to_use = {}
+local opt_feats = loadstring(' return '..opt.features)()
+for ii, ff in ipairs(opt_feats) do
+  if string.find(ff, "std") then
+    opt.std_feats = true
+  elseif string.find(ff, "ent") then
+    opt.ent_feats = true
+  elseif string.find(ff, "disc") then
+    opt.disc_feats = true
+  elseif string.find(ff, "speaker") then
+    opt.speaker_feats = true
+  end
+end
 opt.inputsize = opt.inputsize == -1 and opt.hiddensize[1] or opt.inputsize
 opt.id = opt.id == '' and (paths.basename(opt.datafile, paths.extname(opt.datafile)) .. '-' .. opt.model) or opt.id
 opt.version = 6 -- better NCE bias initialization + new default hyper-params
@@ -176,13 +192,16 @@ function allocate_data(max_context_length, batchsize)
   context      = context      and context     :resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
   context_post = context_post and context_post:resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
   context_ner  = context_ner  and context_ner:resize (max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
+  context_sid  = context_sid  and context_sid:resize (max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
+  context_sent = context_sent and context_sent:resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
+  context_spee = context_spee and context_spee:resize(max_context_length, opt.batchsize):zero() or torch.LongTensor(max_context_length, opt.batchsize):zero()
   context_extr = context_extr and context_extr:resize(max_context_length, opt.batchsize, extr_size):zero() or torch.LongTensor(max_context_length, opt.batchsize, extr_size):zero()
 
   answer = answer and answer:resize(opt.batchsize):zero() or torch.LongTensor(opt.batchsize):zero()
   lineno = lineno and lineno:resize(opt.batchsize):zero() or torch.LongTensor(opt.batchsize):zero()
 end
 
-function loadData(tensor_data, tensor_post, tensor_ner, tensor_extr, tensor_location, eval_heuristics, batch_index)
+function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent, tensor_spee, tensor_extr, tensor_location, eval_heuristics, batch_index)
   -- pos_tags are features for both context and target
   -- extra features only apply to context (e.g. frequency of token in context)
   local num_examples = tensor_location:size(1)
@@ -204,19 +223,46 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_extr, tensor_loca
 
       local offset_end_context = cur_offset + cur_context_length
       local cur_context      = tensor_data[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_post = tensor_post[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_ner  = tensor_ner [{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-
-      local cur_context_extr = tensor_extr[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}] -- cur_context_length x extr_size
+      local cur_context_post, cur_context_ner, cur_context_sid, cur_context_sent, cur_context_spee, cur_context_extr
+      if opt.std_feats then
+        cur_context_post = tensor_post[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+      end
+      if opt.ent_feats then
+        cur_context_ner  = tensor_ner [{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+      end
+      if opt.disc_feats then
+        cur_context_sent = tensor_sent[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+      end
+      if opt.speaker_feats then
+        cur_context_sid  = tensor_sid [{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+        cur_context_spee = tensor_spee[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+      end
+      if opt.std_feats or opt.ent_feats then
+        cur_context_extr = tensor_extr[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}] -- cur_context_length x extr_size
+      end
 
       local cur_answer  = tensor_data[offset_end_context]
 
       local context_size = cur_context:size(1)
 
       context[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context
-      context_post[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_post
-      context_ner [{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_ner
-      context_extr[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_extr
+
+      if opt.std_feats then
+        context_post[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_post
+      end
+      if opt.ent_feats then
+        context_ner [{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_ner
+      end
+      if opt.disc_feats then
+        context_sent[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_sent
+      end
+      if opt.speaker_feats then
+        context_sid [{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_sid
+        context_spee[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_spee
+      end
+      if opt.std_feats or opt.ent_feats then
+        context_extr[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_extr
+      end
 
       answer[idx] = cur_answer
       lineno[idx] = tensor_location[iexample][3]
@@ -269,15 +315,38 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_extr, tensor_loca
   end
 
   if opt.cuda then
-    context_extr = context_extr:cuda()
-    context_ner = context_ner:cuda()
+    if opt.std_feats or opt.ent_feats then
+      context_extr = context_extr:cuda()
+    end
+    if opt.ent_feats then
+      context_ner = context_ner:cuda()
+    end
+    -- QUESTION: why don't we :cuda() the other tensors here????
   end
 
-  contexts = { {context, context_post, context_ner}, context_extr}
+  local cat_ctxs = {context} -- ctx features to be concatenated
+  if opt.std_feats then
+    table.insert(cat_ctxs, context_post)
+  end
+  if opt.ent_feats then
+    table.insert(cat_ctxs, context_ner)
+  end
+  if opt.disc_feats then
+    table.insert(cat_ctxs, context_sent)
+  end
+  if opt.speaker_feats then
+    table.insert(cat_ctxs, context_sid)
+    table.insert(cat_ctxs, context_spee)
+  end
+  contexts = {cat_ctxs}
+  if opt.std_feats or opt.ent_feats then
+    table.insert(contexts, context_extr)
+  end
+  -- the order of cat_ctxs is {context, context_post, context_ner, context_sent, context_sid, context_spee}
   return contexts, answer, answer_ind, lineno
 end
 
-function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tensor_ner, tensor_extr, tensor_location)
+function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sentence, tensor_speech, tensor_extr, tensor_location)
   if not model then
     batch_size = opt.batchsize
     model = lm
@@ -309,6 +378,9 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   tensor_data     = tensor_data     and tensor_data     or data.test_data
   tensor_post     = tensor_post     and tensor_post     or data.test_post
   tensor_ner      = tensor_ner      and tensor_ner      or data.test_ner
+  tensor_sid      = tensor_sid      and tensor_sid      or data.test_sid
+  tensor_sentence = tensor_sentence and tensor_sentence or data.test_sentence
+  tensor_speech   = tensor_speech   and tensor_speech   or data.test_speech
   tensor_extr     = tensor_extr     and tensor_extr     or data.test_extr
   tensor_location = tensor_location and tensor_location or data.test_location
 
@@ -336,7 +408,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   local scorek = {}
   local num_examples = 0
   for i = 1, ntestbatches do
-    local tests_con, tests_ans, tests_ans_ind, tests_lineno = loadData(tensor_data, tensor_post, tensor_ner, tensor_extr, tensor_location, false, all_batches[i])
+    local tests_con, tests_ans, tests_ans_ind, tests_lineno = loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sentence, tensor_speech, tensor_extr, tensor_location, false, all_batches[i])
 
     local inputs = tests_con
     local answer = tests_ans
@@ -431,34 +503,67 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   collect_track_garbage()
 end
 
-function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size)
+function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_size, in_spee_size)
   local doc_rnn = nn.Sequential()
 
   if use_lookup then
     -- input layer (i.e. word embedding space)
     -- input is seqlen x batchsize, output is seqlen x batchsize x insize
     lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
+    -- QUESTION: I assume the lookup below's parameters get unshared at cuda'ing anyway, right?
+    lookup_sid  = lookup_text:clone('weight','gradWeight','bias','gradBias')
     lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
     lookup_ner  = nn.LookupTableMaskZero(ner_vocab_size,  in_ner_size)
+    lookup_sent = nn.LookupTableMaskZero(sent_vocab_size, in_sent_size)
+    lookup_spee = nn.LookupTableMaskZero(spee_vocab_size, in_spee_size)
 
     lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
     lookup_post.maxnormout = -1
     lookup_ner.maxnormout  = -1
+    lookup_sent.maxnormout = -1
+    lookup_spee.maxnormout = -1
+
+-- the order of cat_ctxs is {context, context_post, context_ner, context_sent, context_sid, context_spee}
 
     lookup = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
+    local parlook = nn.ParallelTable():add(lookup_text)
+    if opt.std_feats then
+      parlook:add(lookup_post)
+      insize = insize + in_post_size
+    end
+    if opt.ent_feats then
+      parlook:add(lookup_ner)
+      insize = insize + in_ner_size
+    end
+    if opt.disc_feats then
+      parlook:add(lookup_sent)
+      insize = insize + in_sent_size
+    end
+    if opt.speaker_feats then
+      parlook:add(lookup_sid)
+      parlook:add(lookup_spee)
+      insize = insize + lookup_sid.weight:size(2) + in_spee_size
+    end
+    lookup:add(parlook):add(nn.JoinTable(3))
 
-    featurizer = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
+      -- :add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sid):add(lookup_sent):add(lookup_spee))
+      -- :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
+
+    if opt.std_feats or opt.ent_feats then
+      featurizer = nn.Sequential()
+        :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
+        :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
+      insize = insize + extr_size
+    else
+      featurizer = nn.Sequential():add(nn.SelectTable(1)):add(lookup)
+    end
 
     doc_rnn:add(featurizer)
     if opt.dropout > 0 then
         doc_rnn:add(nn.Dropout(opt.dropout))
     end
   end
-  in_size = in_size + in_post_size + in_ner_size + extr_size
+
   -- rnn layers
   for i,hiddensize in ipairs(opt.hiddensize) do
     -- expects input of size seqlen x batchsize x hiddensize
@@ -477,7 +582,7 @@ end
 function build_model()
 
   if not lm then
-    Yd = build_doc_rnn(true, opt.inputsize, opt.postsize, opt.nersize)
+    Yd = build_doc_rnn(true, opt.inputsize, opt.postsize, opt.nersize, opt.sentsize, opt.speesize)
     Ner = nn.Sequential():add(nn.SelectTable(1)):add(nn.SelectTable(3)):add(nn.Transpose({1,2})) -- batchsize x seqlen
     YdNer = nn.ConcatTable():add(Yd):add(Ner)
     Entity = nn.Sequential()
@@ -644,7 +749,7 @@ function train(params, grad_params, epoch)
   -- for ir = 1,1 do
   for ir = 1,nbatches do
     local a = torch.Timer()
-    local inputs, answers, answer_inds, line_nos = loadData(data.train_data, data.train_post, data.train_ner, data.train_extr,
+    local inputs, answers, answer_inds, line_nos = loadData(data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr,
       data.train_location, false, all_batches[randind[ir]])
 
     local context_input = inputs[1][1]
@@ -874,7 +979,7 @@ function validate(ntrial, epoch)
 
   -- for i = 1, 1 do
   for i = 1, nvalbatches do
-    local valid_con, valid_ans, valid_ans_ind, valid_lineno = loadData(data.valid_data, data.valid_post, data.valid_ner, data.valid_extr,
+    local valid_con, valid_ans, valid_ans_ind, valid_lineno = loadData(data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr,
       data.valid_location, false, all_batches[i])
 
     local inputs = valid_con
@@ -948,6 +1053,8 @@ end
 vocab_size = data.vocab_size[1]
 post_vocab_size = data.post_vocab_size[1]
 ner_vocab_size  = data.ner_vocab_size [1]
+sent_vocab_size = data.sent_vocab_size[1]
+spee_vocab_size = data.spee_vocab_size[1]
 extr_size = data.train_extr:size(2)
 
 -- store the top-k predictions to be used at the next epoch
@@ -962,7 +1069,7 @@ if #opt.testmodel > 0 then
   -- test_model(opt.testmodel, 'analysis', data.analysis_data, data.analysis_post, data.analysis_ner, data.analysis_sentence, data.analysis_speech, data.analysis_extr, data.analysis_location)
 
   print("Processing validation set")
-  test_model(opt.testmodel, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_extr, data.valid_location)
+  test_model(opt.testmodel, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
   os.exit()
 end
 
@@ -1019,7 +1126,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   validate(ntrial, epoch)
 
   print("Processing train set")
-  test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
+  test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, data.train_location)
 
   epoch = epoch + 1
   activate_topk = true
