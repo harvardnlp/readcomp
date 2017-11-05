@@ -752,25 +752,32 @@ function train(params, grad_params, epoch)
       data.train_location, false, all_batches[randind[ir]])
 
     local context_input = inputs[1][1]
-    local ner_input = inputs[1][3] -- seqlen x batchsize
+    local ner_input
+    if opt.ent_feats and opt.std_feats then
+      ner_input = inputs[1][3] -- seqlen x batchsize
+    elseif opt.ent_feats then
+      ner_input = inputs[1][2]
+    end
 
-    ner_labels:zero()
-    for bs = 1, ner_input:size(2) do
-      local speaker_to_index = {}
-      local num_distinct_speakers = 0
-      local num_speakers = 0
-      for sl = 1, ner_input:size(1) do
-        if ner_input[sl][bs] == 2 then -- 2 = PERSON
-          num_speakers = num_speakers + 1
-          if num_speakers <= opt.entity then
-            local speaker_id = context_input[sl][bs]
-            if speaker_to_index[speaker_id] == None then
-              num_distinct_speakers = num_distinct_speakers + 1
-              speaker_to_index[speaker_id] = num_distinct_speakers
+    if opt.ent_feats and opt.multitask then
+      ner_labels:zero()
+      for bs = 1, ner_input:size(2) do
+        local speaker_to_index = {}
+        local num_distinct_speakers = 0
+        local num_speakers = 0
+        for sl = 1, ner_input:size(1) do
+          if ner_input[sl][bs] == 2 then -- 2 = PERSON
+            num_speakers = num_speakers + 1
+            if num_speakers <= opt.entity then
+              local speaker_id = context_input[sl][bs]
+              if speaker_to_index[speaker_id] == None then
+                num_distinct_speakers = num_distinct_speakers + 1
+                speaker_to_index[speaker_id] = num_distinct_speakers
+              end
+              local speaker_index = speaker_to_index[speaker_id]
+              speaker_index = speaker_index > opt.entitysize and 0 or speaker_index
+              ner_labels[bs][num_speakers] = speaker_index
             end
-            local speaker_index = speaker_to_index[speaker_id]
-            speaker_index = speaker_index > opt.entitysize and 0 or speaker_index
-            ner_labels[bs][num_speakers] = speaker_index
           end
         end
       end
@@ -790,8 +797,13 @@ function train(params, grad_params, epoch)
 
       -- forward
       local outputs_joint = lm:forward(inputs)
-      local outputs_pre = outputs_joint[1]
-      local outputs_ner = outputs_joint[2]
+      local outputs_pre, outputs_ner
+      if opt.ent_feats and opt.multitask then
+        outputs_pre = outputs_joint[1]
+        outputs_ner = outputs_joint[2]
+      else
+        outputs_pre = outputs_joint
+      end
 
 
       -- print('context_input:size()')
@@ -889,8 +901,9 @@ function train(params, grad_params, epoch)
       sumErr = sumErr + err / opt.batchsize
 
       -- compute ner loss
-      sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
-      print("ey", sumErr)
+      if opt.ent_feats and opt.multitask then
+        sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
+      end
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..
@@ -925,10 +938,16 @@ function train(params, grad_params, epoch)
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
       mask_attention_gradients(context_input, grad_outputs, previous_topk)
 
-      grad_ner = crit_ner:backward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
+      if opt.ent_feats and opt.multitask then
+        grad_ner = crit_ner:backward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
+      end
 
       lm:zeroGradParameters()
-      lm:backward(inputs, {grad_outputs, grad_ner})
+      if opt.ent_feats and opt.multitask then
+        lm:backward(inputs, {grad_outputs, grad_ner})
+      else
+        lm:backward(inputs, grad_outputs)
+      end
 
       -- update
       if opt.cutoff > 0 then
