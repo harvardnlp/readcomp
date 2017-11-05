@@ -289,7 +289,8 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent,
     context_ner = context_ner:cuda()
   end
 
-  contexts = { {context, context_post, context_ner, context_sid, context_sent, context_spee}, context_extr}
+  --contexts = { {context, context_post, context_ner, context_sid, context_sent, context_spee}, context_extr}
+  contexts = { {context, context_post, context_ner, context_sent, context_sid, context_spee}, context_extr}
   return contexts, answer, answer_ind, lineno
 end
 
@@ -464,7 +465,8 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
     lookup_spee.maxnormout = -1
 
     lookup = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sid):add(lookup_sent):add(lookup_spee))
+      --:add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sid):add(lookup_sent):add(lookup_spee))
+      :add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sent):add(lookup_sid):add(lookup_spee))
       :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
 
     featurizer = nn.Sequential()
@@ -799,6 +801,7 @@ function train(params, grad_params, epoch)
 
       -- compute ner loss
       sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
+      print("ey", sumErr)
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..
