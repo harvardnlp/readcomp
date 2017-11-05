@@ -676,32 +676,25 @@ function train(params, grad_params, epoch)
       data.train_location, false, all_batches[randind[ir]])
 
     local context_input = inputs[1][1]
-    local ner_input
-    if opt.ent_feats and opt.std_feats then
-      ner_input = inputs[1][3] -- seqlen x batchsize
-    elseif opt.ent_feats then
-      ner_input = inputs[1][2]
-    end
+    local ner_input = inputs[1][3] -- seqlen x batchsize
 
-    if opt.ent_feats and opt.multitask then
-      ner_labels:zero()
-      for bs = 1, ner_input:size(2) do
-        local speaker_to_index = {}
-        local num_distinct_speakers = 0
-        local num_speakers = 0
-        for sl = 1, ner_input:size(1) do
-          if ner_input[sl][bs] == 2 then -- 2 = PERSON
-            num_speakers = num_speakers + 1
-            if num_speakers <= opt.entity then
-              local speaker_id = context_input[sl][bs]
-              if speaker_to_index[speaker_id] == None then
-                num_distinct_speakers = num_distinct_speakers + 1
-                speaker_to_index[speaker_id] = num_distinct_speakers
-              end
-              local speaker_index = speaker_to_index[speaker_id]
-              speaker_index = speaker_index > opt.entitysize and 0 or speaker_index
-              ner_labels[bs][num_speakers] = speaker_index
+    ner_labels:zero()
+    for bs = 1, ner_input:size(2) do
+      local speaker_to_index = {}
+      local num_distinct_speakers = 0
+      local num_speakers = 0
+      for sl = 1, ner_input:size(1) do
+        if ner_input[sl][bs] == 2 then -- 2 = PERSON
+          num_speakers = num_speakers + 1
+          if num_speakers <= opt.entity then
+            local speaker_id = context_input[sl][bs]
+            if speaker_to_index[speaker_id] == None then
+              num_distinct_speakers = num_distinct_speakers + 1
+              speaker_to_index[speaker_id] = num_distinct_speakers
             end
+            local speaker_index = speaker_to_index[speaker_id]
+            speaker_index = speaker_index > opt.entitysize and 0 or speaker_index
+            ner_labels[bs][num_speakers] = speaker_index
           end
         end
       end
@@ -721,13 +714,8 @@ function train(params, grad_params, epoch)
 
       -- forward
       local outputs_joint = lm:forward(inputs)
-      local outputs_pre, outputs_ner
-      if opt.ent_feats and opt.multitask then
-        outputs_pre = outputs_joint[1]
-        outputs_ner = outputs_joint[2]
-      else
-        outputs_pre = outputs_joint
-      end
+      local outputs_pre = outputs_joint[1]
+      local outputs_ner = outputs_joint[2]
 
 
       -- print('context_input:size()')
@@ -825,9 +813,7 @@ function train(params, grad_params, epoch)
       sumErr = sumErr + err / opt.batchsize
 
       -- compute ner loss
-      if opt.ent_feats and opt.multitask then
-        sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
-      end
+      sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..
@@ -862,16 +848,10 @@ function train(params, grad_params, epoch)
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
       mask_attention_gradients(context_input, grad_outputs, previous_topk)
 
-      if opt.ent_feats and opt.multitask then
-        grad_ner = crit_ner:backward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
-      end
+      grad_ner = crit_ner:backward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
 
       lm:zeroGradParameters()
-      if opt.ent_feats and opt.multitask then
-        lm:backward(inputs, {grad_outputs, grad_ner})
-      else
-        lm:backward(inputs, grad_outputs)
-      end
+      lm:backward(inputs, {grad_outputs, grad_ner})
 
       -- update
       if opt.cutoff > 0 then
@@ -911,6 +891,7 @@ function train(params, grad_params, epoch)
 
   xplog.trainloss[epoch] = loss
 end
+
 
 function validate(ntrial, epoch)
   local num_examples = data.valid_location:size(1)
