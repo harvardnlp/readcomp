@@ -575,32 +575,38 @@ end
 function build_model()
 
   if not lm then
+    x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
     Yd = build_doc_rnn(true, opt.inputsize, opt.postsize, opt.nersize, opt.sentsize, opt.speesize)
-    Ner = nn.Sequential():add(nn.SelectTable(1)):add(nn.SelectTable(3)):add(nn.Transpose({1,2})) -- batchsize x seqlen
-    YdNer = nn.ConcatTable():add(Yd):add(Ner)
-    Entity = nn.Sequential()
-      :add(nn.MaskExtraction(2, opt.entity)) -- batch x entity x hidsize
-      :add(nn.Bottle(nn.MaskZero(nn.Sequential()
-        :add(nn.Linear(opt.hiddensize[#opt.hiddensize] * 2, opt.entitysize))
-        :add(nn.LogSoftMax()), 1)))
-      :add(nn.View(opt.batchsize * opt.entity, opt.entitysize))
-
     U = Yd:clone():add(nn.MaskZeroSeqBRNNFinal()):add(nn.Unsqueeze(3)) -- batch x (2 * hiddensize) x 1
 
-    x_inp = nn.Identity()():annotate({name = 'x', description = 'memories'})
-    nng_YdNer = YdNer(x_inp):annotate({name = 'YdNer', description = 'Yd Ner'})
+    if opt.ent_feats and opt.multitask then
+      local ner_stuff_idx = opt.std_feats and 3 or 2
+      Ner = nn.Sequential():add(nn.SelectTable(1)):add(nn.SelectTable(ner_stuff_idx)):add(nn.Transpose({1,2})) -- batchsize x seqlen
+      YdNer = nn.ConcatTable():add(Yd):add(Ner)
+      Entity = nn.Sequential()
+        :add(nn.MaskExtraction(2, opt.entity)) -- batch x entity x hidsize
+        :add(nn.Bottle(nn.MaskZero(nn.Sequential()
+          :add(nn.Linear(opt.hiddensize[#opt.hiddensize] * 2, opt.entitysize))
+          :add(nn.LogSoftMax()), 1)))
+        :add(nn.View(opt.batchsize * opt.entity, opt.entitysize))
+      nng_YdNer = YdNer(x_inp):annotate({name = 'YdNer', description = 'Yd Ner'})
+      -- predict ner
+      nng_Entity = Entity(nng_YdNer):annotate({name = 'Entity', description = 'Entity'})
+      -- predict answer
+      nng_Yd = nn.SelectTable(1)(nng_YdNer):annotate({name = 'Yd', description = 'memory embeddings'})
+    else
+      nng_Yd = Yd(x_inp):annotate({name = 'Yd', description = 'memory embeddings'})
+    end
 
-    -- predict ner
-    nng_Entity = Entity(nng_YdNer):annotate({name = 'Entity', description = 'Entity'})
-
-    -- predict answer
-    nng_Yd = nn.SelectTable(1)(nng_YdNer):annotate({name = 'Yd', description = 'memory embeddings'})
     nng_U = U(x_inp):annotate({name = 'u', description = 'query embeddings'})
-
     Joint = nn.Sequential():add(nn.MM()):add(nn.Squeeze())
     nng_YdU = Joint({nng_Yd, nng_U}):annotate({name = 'Joint', description = 'Yd * U'})
 
-    lm = nn.gModule({x_inp}, {nng_YdU, nng_Entity})
+    if opt.ent_feats and opt.multitask then
+      lm = nn.gModule({x_inp}, {nng_YdU, nng_Entity})
+    else
+      lm = nn.gModule({x_inp}, {nng_YdU})
+    end
 
     -- don't remember previous state between batches since
     -- every example is entirely contained in a batch
@@ -620,7 +626,12 @@ function build_model()
       lookup_text.weight[{{1, pretrained_vocab_size}}] = data.word_embeddings
     end
 
-    attention_layer = nn.SoftMax() -- to be applied with some mask
+    if opt.rescale_attn then
+      local tophiddensize = opt.hiddensize[#opt.hiddensize]
+      attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*tophiddensize))):add(nn.SoftMax())
+    else
+      attention_layer = nn.SoftMax() -- to be applied with some mask
+    end
     attention_ner = nn.SoftMax() -- for ner prediction
     crit_ner = nn.MaskZeroCriterion(nn.ClassNLLCriterion(None, None, 0), 1) -- ignore zero label and zero input rows
   end
