@@ -496,33 +496,67 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
     -- input layer (i.e. word embedding space)
     -- input is seqlen x batchsize, output is seqlen x batchsize x insize
     lookup_text = nn.LookupTableMaskZero(vocab_size, in_size)
-    lookup_sid  = lookup_text:clone('weight','gradWeight','bias','gradBias')
-    lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
-    lookup_ner  = nn.LookupTableMaskZero(ner_vocab_size,  in_ner_size)
-    lookup_sent = nn.LookupTableMaskZero(sent_vocab_size, in_sent_size)
-    lookup_spee = nn.LookupTableMaskZero(spee_vocab_size, in_spee_size)
-
     lookup_text.maxnormout = -1 -- prevent weird maxnormout behaviour
-    lookup_post.maxnormout = -1
-    lookup_ner.maxnormout  = -1
-    lookup_sent.maxnormout = -1
-    lookup_spee.maxnormout = -1
+    -- QUESTION: I assume the lookup below's parameters get unshared at cuda'ing anyway, right?
+    lookup_sid  = lookup_text:clone('weight','gradWeight','bias','gradBias')
+    if opt.std_feats then
+      lookup_post = nn.LookupTableMaskZero(post_vocab_size, in_post_size)
+      lookup_post.maxnormout = -1
+    end
+    if opt.ent_feats then
+      lookup_ner  = nn.LookupTableMaskZero(ner_vocab_size,  in_ner_size)
+      lookup_ner.maxnormout  = -1
+    end
+    if opt.disc_feats then
+      lookup_sent = nn.LookupTableMaskZero(sent_vocab_size, in_sent_size)
+      lookup_sent.maxnormout = -1
+    end
+    if opt.speaker_feats then
+      lookup_spee = nn.LookupTableMaskZero(spee_vocab_size, in_spee_size)
+       lookup_spee.maxnormout = -1
+    end
+
+-- the order of cat_ctxs is {context, context_post, context_ner, context_sent, context_sid, context_spee}
 
     lookup = nn.Sequential()
-      --:add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sid):add(lookup_sent):add(lookup_spee))
-      :add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sent):add(lookup_sid):add(lookup_spee))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
+    local parlook = nn.ParallelTable():add(lookup_text)
+    if opt.std_feats then
+      parlook:add(lookup_post)
+      in_size = in_size + in_post_size
+    end
+    if opt.ent_feats then
+      parlook:add(lookup_ner)
+      in_size = in_size + in_ner_size
+    end
+    if opt.disc_feats then
+      parlook:add(lookup_sent)
+      in_size = in_size + in_sent_size
+    end
+    if opt.speaker_feats then
+      parlook:add(lookup_sid)
+      parlook:add(lookup_spee)
+      in_size = in_size + lookup_sid.weight:size(2) + in_spee_size
+    end
+    lookup:add(parlook):add(nn.JoinTable(3))
 
-    featurizer = nn.Sequential()
-      :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
-      :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
+      -- :add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sid):add(lookup_sent):add(lookup_spee))
+      -- :add(nn.JoinTable(3)) -- seqlen x batchsize x (in_size + in_post_size)
+
+    if opt.std_feats or opt.ent_feats then
+      featurizer = nn.Sequential()
+        :add(nn.ParallelTable():add(lookup):add(nn.Mul()))
+        :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size + extr_size)
+      in_size = in_size + extr_size
+    else
+      featurizer = nn.Sequential():add(nn.SelectTable(1)):add(lookup)
+    end
 
     doc_rnn:add(featurizer)
     if opt.dropout > 0 then
         doc_rnn:add(nn.Dropout(opt.dropout))
     end
   end
-  in_size = in_size * 2 + in_post_size + in_ner_size + in_sent_size + in_spee_size + extr_size
+
   -- rnn layers
   for i,hiddensize in ipairs(opt.hiddensize) do
     -- expects input of size seqlen x batchsize x hiddensize
