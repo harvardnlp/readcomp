@@ -215,25 +215,46 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent,
 
       local offset_end_context = cur_offset + cur_context_length
       local cur_context      = tensor_data[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_post = tensor_post[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_ner  = tensor_ner [{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_sid  = tensor_sid [{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_sent = tensor_sent[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-      local cur_context_spee = tensor_spee[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
-
-      local cur_context_extr = tensor_extr[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}] -- cur_context_length x extr_size
+      local cur_context_post, cur_context_ner, cur_context_sid, cur_context_sent, cur_context_spee, cur_context_extr
+      if opt.std_feats then
+        cur_context_post = tensor_post[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+      end
+      if opt.ent_feats then
+        cur_context_ner  = tensor_ner [{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+      end
+      if opt.disc_feats then
+        cur_context_sent = tensor_sent[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+      end
+      if opt.speaker_feats then
+        cur_context_sid  = tensor_sid [{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+        cur_context_spee = tensor_spee[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}]
+      end
+      if opt.std_feats or opt.ent_feats then
+        cur_context_extr = tensor_extr[{{offset_end_context - cur_capped_context_length, offset_end_context - 1}}] -- cur_context_length x extr_size
+      end
 
       local cur_answer  = tensor_data[offset_end_context]
 
       local context_size = cur_context:size(1)
 
       context[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context
-      context_post[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_post
-      context_ner [{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_ner
-      context_sid [{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_sid
-      context_sent[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_sent
-      context_spee[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_spee
-      context_extr[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_extr
+
+      if opt.std_feats then
+        context_post[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_post
+      end
+      if opt.ent_feats then
+        context_ner [{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_ner
+      end
+      if opt.disc_feats then
+        context_sent[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_sent
+      end
+      if opt.speaker_feats then
+        context_sid [{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_sid
+        context_spee[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_spee
+      end
+      if opt.std_feats or opt.ent_feats then
+        context_extr[{{max_context_length - context_size + 1, max_context_length}, idx}] = cur_context_extr
+      end
 
       answer[idx] = cur_answer
       lineno[idx] = tensor_location[iexample][3]
@@ -286,12 +307,34 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent,
   end
 
   if opt.cuda then
-    context_extr = context_extr:cuda()
-    context_ner = context_ner:cuda()
+    if opt.std_feats or opt.ent_feats then
+      context_extr = context_extr:cuda()
+    end
+    if opt.ent_feats then
+      context_ner = context_ner:cuda()
+    end
+    -- QUESTION: why don't we :cuda() the other tensors here????
   end
 
-  --contexts = { {context, context_post, context_ner, context_sid, context_sent, context_spee}, context_extr}
-  contexts = { {context, context_post, context_ner, context_sent, context_sid, context_spee}, context_extr}
+  local cat_ctxs = {context} -- ctx features to be concatenated
+  if opt.std_feats then
+    table.insert(cat_ctxs, context_post)
+  end
+  if opt.ent_feats then
+    table.insert(cat_ctxs, context_ner)
+  end
+  if opt.disc_feats then
+    table.insert(cat_ctxs, context_sent)
+  end
+  if opt.speaker_feats then
+    table.insert(cat_ctxs, context_sid)
+    table.insert(cat_ctxs, context_spee)
+  end
+  contexts = {cat_ctxs}
+  if opt.std_feats or opt.ent_feats then
+    table.insert(contexts, context_extr)
+  end
+  -- the order of cat_ctxs is {context, context_post, context_ner, context_sent, context_sid, context_spee}
   return contexts, answer, answer_ind, lineno
 end
 
