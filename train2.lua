@@ -1,3 +1,4 @@
+-- from https://bitbucket.org/lhoang29/lambada/src/8ba59487af5a7cebda0247e4329574b642268ec7/train.lua?fileviewer=file-view-default
 require 'hdf5'
 require 'paths'
 require 'rnn'
@@ -43,8 +44,6 @@ cmd:option('--silent', false, 'don\'t print anything to stdout')
 cmd:option('--lr', 0.001, 'learning rate')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
-cmd:option('--rescale_attn', false, 'rescale attention scores by sqrt(dim)')
-cmd:option('--multitask', false, 'also predict speaker stuff') --TODO: add a coefficient
 -- rnn layer
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--postsize', 80, 'size of pos_tag embeddings')
@@ -89,6 +88,7 @@ torch.manualSeed(opt.randomseed)
 if opt.cuda then -- do this before building model to prevent segfault
   require 'cunn'
   cutorch.setDevice(opt.device)
+  cutorch.manualSeed(opt.randomseed)
 end
 
 local xplog, lm
@@ -299,19 +299,13 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     model = lm
     model_file = saved_model_file and saved_model_file or paths.concat(opt.savepath, opt.id..'.t7')
 
-    if not lm or saved_model_file then
+    if not lm then
       -- load model for computing accuracy & perplexity for target answers
-      print('loading model ' .. model_file)
       metadata = torch.load(model_file)
       batch_size = metadata.opt.batchsize
       model = metadata.model
       puncs = metadata.puncs -- punctuations
-      if metadata.opt.rescale_attn then
-        local tophiddensize = metadata.opt.hiddensize[#metadata.opt.hiddensize]
-        attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*tophiddensize))):add(nn.SoftMax())
-      else
-        attention_layer = nn.SoftMax() -- to be applied with some mask
-      end
+      attention_layer = nn.SoftMax()
       if opt.cuda then
         attention_layer:cuda()
       end
@@ -360,13 +354,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     local inputs = tests_con
     local answer = tests_ans
     local in_words = inputs[1][1]
-    local outpre
-    if opt.ent_feats and opt.multitask then
-      outpre = model:forward(inputs)[1]
-    else
-      outpre = model:forward(inputs)
-    end
-    local outputs = mask_attention(in_words, outpre, topk_answers[i])
+    local outputs = mask_attention(in_words, model:forward(inputs)[1], topk_answers[i])
 
     local predictions = answer.new():resizeAs(answer):zero()
     local truth = {}
@@ -475,11 +463,8 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
     lookup_sent.maxnormout = -1
     lookup_spee.maxnormout = -1
 
--- the order of cat_ctxs is {context, context_post, context_ner, context_sent, context_sid, context_spee}
-
     lookup = nn.Sequential()
       :add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sid):add(lookup_sent):add(lookup_spee))
-      --:add(nn.ParallelTable():add(lookup_text):add(lookup_post):add(lookup_ner):add(lookup_sent):add(lookup_sid):add(lookup_spee))
       :add(nn.JoinTable(3)) -- seqlen x batchsize x (insize + in_post_size)
 
     featurizer = nn.Sequential()
@@ -892,7 +877,6 @@ function train(params, grad_params, epoch)
   xplog.trainloss[epoch] = loss
 end
 
-
 function validate(ntrial, epoch)
   local num_examples = data.valid_location:size(1)
   local all_batches = torch.range(1, num_examples, opt.batchsize)
@@ -908,13 +892,7 @@ function validate(ntrial, epoch)
 
     local inputs = valid_con
     local answer_inds = valid_ans_ind
-    local outpre
-    if opt.ent_feats and opt.multitask then
-      outpre = lm:forward(inputs)[1]
-    else
-      outpre = lm:forward(inputs)
-    end
-    local outputs = mask_attention(inputs[1][1], outpre, topk_valid and topk_valid[all_batches[i]] or nil)
+    local outputs = mask_attention(inputs[1][1], lm:forward(inputs)[1], topk_valid and topk_valid[all_batches[i]] or nil)
     local err = 0
     for ib = 1, opt.batchsize do
       if valid_ans[ib] > 0 and puncs[valid_ans[ib]] == nil and stopwords[valid_ans[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers
@@ -948,7 +926,8 @@ function validate(ntrial, epoch)
 
   -- early-stopping
   if validloss < xplog.minvalloss then
-    print("Found new validation minima")
+    print("Processing test set")
+    test_model()
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch
@@ -981,15 +960,11 @@ for i = 1, data.stopwords:size(1) do
 end
 
 vocab_size = data.vocab_size[1]
-post_vocab_size = opt.std_feats and data.post_vocab_size[1] or -1
-ner_vocab_size  = opt.ent_feats and data.ner_vocab_size [1] or -1
-sent_vocab_size = opt.disc_feats and data.sent_vocab_size[1] or -1
-spee_vocab_size = opt.speaker_feats and data.spee_vocab_size[1] or -1
-if opt.std_feats or opt.ent_feats then
-  extr_size = data.train_extr:size(2)
-else
-  extr_size = -1
-end
+post_vocab_size = data.post_vocab_size[1]
+ner_vocab_size  = data.ner_vocab_size [1]
+sent_vocab_size = data.sent_vocab_size[1]
+spee_vocab_size = data.spee_vocab_size[1]
+extr_size = data.train_extr:size(2)
 
 -- store the top-k predictions to be used at the next epoch
 topk_train = nil
@@ -1059,12 +1034,13 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   train(params, grad_params, epoch)
   validate(ntrial, epoch)
 
+  -- print("Processing test set")
+  -- test_model()
+
   print("Processing train set")
   test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, data.train_location)
 
   epoch = epoch + 1
   activate_topk = true
-end
 
-print("Processing test set using best model on validation")
-test_model(paths.concat(opt.savepath, opt.id..'.t7'))
+end
