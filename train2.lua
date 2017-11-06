@@ -904,6 +904,7 @@ function train(params, grad_params, epoch)
       if opt.ent_feats and opt.multitask then
         sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
       end
+      print("ey", sumErr)
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..
