@@ -675,10 +675,9 @@ function mask_attention(input_context, output_pre_attention, topk_answers)
   -- attention while masking out stopwords, punctuations
   for i = 1, input_context:size(1) do -- seqlen
     for j = 1, input_context:size(2) do -- batchsize
-      if activate_topk and topk_answers then
+      if activate_topk and topk_answers and topk_answers[{j,{},1}]:ne(0):any() then
         local topk_words = topk_answers[{j,{},1}]
-        topk_words = topk_words[topk_words:ne(0)]
-        if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
+        if input_context[i][j] == 0 or not find_element(input_context[i][j], topk_words[topk_words:ne(0)]) then
           output_pre_attention[j][i] = -math.huge
         end
       else
@@ -696,10 +695,9 @@ function mask_attention_gradients(input_context, output_grad, topk_answers)
   -- output_grad is batchsize x seqlen
   for i = 1, input_context:size(1) do
     for j = 1, input_context:size(2) do
-      if activate_topk and topk_answers then
+      if activate_topk and topk_answers and topk_answers[{j,{},1}]:ne(0):any() then
         local topk_words = topk_answers[{j,{},1}]
-        topk_words = topk_words[topk_words:ne(0)]
-        if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
+        if input_context[i][j] == 0 or not find_element(input_context[i][j], topk_words[topk_words:ne(0)]) then
           output_grad[j][i] = 0
         end
       else
@@ -1045,8 +1043,7 @@ function validate(ntrial, epoch)
 
   -- early-stopping
   if validloss < xplog.minvalloss then
-    print("Processing test set")
-    test_model()
+    print("Found new validation minima")
     -- save best version of model
     xplog.minvalloss = validloss
     xplog.epoch = epoch
@@ -1132,7 +1129,6 @@ if not xplog then
   xplog.dataset = 'Lambada'
   -- will only serialize params
   xplog.model = nn.Serial(lm)
-  xplog.model:mediumSerial()
   -- keep a log of NLL for each epoch
   xplog.trainloss = {}
   xplog.valloss = {}
@@ -1156,15 +1152,21 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("Epoch #"..epoch.." :")
 
   train(params, grad_params, epoch)
-  validate(ntrial, epoch)
+  if opt.maxepoch > 1 then
+    validate(ntrial, epoch)
 
-  -- print("Processing test set")
-  -- test_model()
+    print("Processing train set")
+    test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
 
-  print("Processing train set")
-  test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, data.train_location)
-
+    activate_topk = true
+  else
+    print("Processing test set using in-memory model")
+    test_model() -- test using in-memory model in case of single epoch (faster than saving/reloading)
+  end
   epoch = epoch + 1
-  activate_topk = true
+end
 
+if opt.maxepoch > 1 then
+  print("Processing test set using best model on validation")
+  test_model(paths.concat(opt.savepath, opt.id..'.t7'))
 end

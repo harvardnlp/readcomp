@@ -1,3 +1,4 @@
+-- from https://bitbucket.org/lhoang29/lambada/src/8ba59487af5a7cebda0247e4329574b642268ec7/train.lua?fileviewer=file-view-default
 require 'hdf5'
 require 'paths'
 require 'rnn'
@@ -43,7 +44,6 @@ cmd:option('--silent', false, 'don\'t print anything to stdout')
 cmd:option('--lr', 0.001, 'learning rate')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
-cmd:option('--rescale_attn', false, 'rescale attention scores by sqrt(dim)')
 cmd:option('--multitask', false, 'also predict speaker stuff') --TODO: add a coefficient
 -- rnn layer
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
@@ -89,6 +89,7 @@ torch.manualSeed(opt.randomseed)
 if opt.cuda then -- do this before building model to prevent segfault
   require 'cunn'
   cutorch.setDevice(opt.device)
+  cutorch.manualSeed(opt.randomseed)
 end
 
 local xplog, lm
@@ -345,17 +346,11 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
 
     if not lm or saved_model_file then
       -- load model for computing accuracy & perplexity for target answers
-      print('loading model ' .. model_file)
       metadata = torch.load(model_file)
       batch_size = metadata.opt.batchsize
       model = metadata.model
       puncs = metadata.puncs -- punctuations
-      if metadata.opt.rescale_attn then
-        local tophiddensize = metadata.opt.hiddensize[#metadata.opt.hiddensize]
-        attention_layer = nn.Sequential():add(nn.MulConstant(1.0/math.sqrt(2*tophiddensize))):add(nn.SoftMax())
-      else
-        attention_layer = nn.SoftMax() -- to be applied with some mask
-      end
+      attention_layer = nn.SoftMax()
       if opt.cuda then
         attention_layer:cuda()
       end
@@ -410,6 +405,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     else
       outpre = model:forward(inputs)
     end
+    --local outputs = mask_attention(in_words, model:forward(inputs)[1], topk_answers[i])
     local outputs = mask_attention(in_words, outpre, topk_answers[i])
 
     local predictions = answer.new():resizeAs(answer):zero()
@@ -498,6 +494,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   end
 
   collect_track_garbage()
+  return accuracy
 end
 
 function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_size, in_spee_size)
@@ -679,10 +676,9 @@ function mask_attention(input_context, output_pre_attention, topk_answers)
   -- attention while masking out stopwords, punctuations
   for i = 1, input_context:size(1) do -- seqlen
     for j = 1, input_context:size(2) do -- batchsize
-      if activate_topk and topk_answers then
+      if activate_topk and topk_answers and topk_answers[{j,{},1}]:ne(0):any() then
         local topk_words = topk_answers[{j,{},1}]
-        topk_words = topk_words[topk_words:ne(0)]
-        if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
+        if input_context[i][j] == 0 or not find_element(input_context[i][j], topk_words[topk_words:ne(0)]) then
           output_pre_attention[j][i] = -math.huge
         end
       else
@@ -700,10 +696,9 @@ function mask_attention_gradients(input_context, output_grad, topk_answers)
   -- output_grad is batchsize x seqlen
   for i = 1, input_context:size(1) do
     for j = 1, input_context:size(2) do
-      if activate_topk and topk_answers then
+      if activate_topk and topk_answers and topk_answers[{j,{},1}]:ne(0):any() then
         local topk_words = topk_answers[{j,{},1}]
-        topk_words = topk_words[topk_words:ne(0)]
-        if input_context[i][j] == 0 or (topk_words:numel() > 0 and not find_element(input_context[i][j], topk_words)) then
+        if input_context[i][j] == 0 or not find_element(input_context[i][j], topk_words[topk_words:ne(0)]) then
           output_grad[j][i] = 0
         end
       else
@@ -915,6 +910,7 @@ function train(params, grad_params, epoch)
       if opt.ent_feats and opt.multitask then
         sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
       end
+      --print("ey", sumErr)
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..
@@ -1014,13 +1010,7 @@ function validate(ntrial, epoch)
 
     local inputs = valid_con
     local answer_inds = valid_ans_ind
-    local outpre
-    if opt.ent_feats and opt.multitask then
-      outpre = lm:forward(inputs)[1]
-    else
-      outpre = lm:forward(inputs)
-    end
-    local outputs = mask_attention(inputs[1][1], outpre, topk_valid and topk_valid[all_batches[i]] or nil)
+    local outputs = mask_attention(inputs[1][1], lm:forward(inputs)[1], topk_valid and topk_valid[all_batches[i]] or nil)
     local err = 0
     for ib = 1, opt.batchsize do
       if valid_ans[ib] > 0 and puncs[valid_ans[ib]] == nil and stopwords[valid_ans[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers
@@ -1097,6 +1087,7 @@ else
   extr_size = -1
 end
 
+
 -- store the top-k predictions to be used at the next epoch
 topk_train = nil
 topk_valid = nil
@@ -1139,12 +1130,13 @@ if not xplog then
   xplog.dataset = 'Lambada'
   -- will only serialize params
   xplog.model = nn.Serial(lm)
-  xplog.model:mediumSerial()
   -- keep a log of NLL for each epoch
   xplog.trainloss = {}
-  xplog.valloss = {}
+  --xplog.valloss = {}
+  xplog.validacc = {}
   -- will be used for early-stopping
-  xplog.minvalloss = 99999999
+  --xplog.minvalloss = 99999999
+  xplog.maxvalacc = 0
   xplog.epoch = 0
   paths.mkdir(opt.savepath)
 end
@@ -1163,14 +1155,48 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("Epoch #"..epoch.." :")
 
   train(params, grad_params, epoch)
-  validate(ntrial, epoch)
+  if opt.maxepoch > 1 then
+    --validate(ntrial, epoch)
+    -- get acc on validation
+    local validacc = test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
+    xplog.validacc[epoch] = validacc
+    --xplog.valloss[epoch] = validloss
+    ntrial = ntrial + 1
 
-  print("Processing train set")
-  test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr, data.train_location)
+    -- early-stopping
+    if validacc > xplog.maxvalacc then
+      print("Found new validation minima")
+      -- save best version of model
+      xplog.maxvalacc = validacc
+      xplog.epoch = epoch
+      local filename = paths.concat(opt.savepath, opt.id..'.t7')
+      if not opt.dontsave then
+        print("Found new minima. Saving to "..filename)
+        torch.save(filename, xplog)
+      end
+      ntrial = 0
+    elseif ntrial >= opt.earlystop then
+      print("No new minima found after "..ntrial.." epochs.")
+      print("Stopping experiment.")
+      print("Best model can be found in "..paths.concat(opt.savepath, opt.id..'.t7'))
+      os.exit()
+    end
 
+
+    print("Processing train set")
+    test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
+
+    activate_topk = true
+  else
+    print("Processing val set using in-memory model")
+    test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
+    print("Processing test set using in-memory model")
+    test_model() -- test using in-memory model in case of single epoch (faster than saving/reloading)
+  end
   epoch = epoch + 1
-  activate_topk = true
 end
 
-print("Processing test set using best model on validation")
-test_model(paths.concat(opt.savepath, opt.id..'.t7'))
+if opt.maxepoch > 1 then
+  print("Processing test set using best model on validation")
+  test_model(paths.concat(opt.savepath, opt.id..'.t7'))
+end
