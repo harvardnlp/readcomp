@@ -1184,10 +1184,12 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     end
 
 
-    print("Processing train set")
-    test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
-
     activate_topk = opt.activate_topk --true
+    if activate_topk then
+      print("Processing train set")
+      test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
+    end
+
   else
     print("Processing val set using in-memory model")
     test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
