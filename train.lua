@@ -45,6 +45,7 @@ cmd:option('--lr', 0.001, 'learning rate')
 cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution between -uniform and uniform. -1 means default initialization')
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 cmd:option('--multitask', false, 'also predict speaker stuff') --TODO: add a coefficient
+cmd:option('--activate_topk', false, 'attn narrowing')
 -- rnn layer
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--postsize', 80, 'size of pos_tag embeddings')
@@ -1186,7 +1187,7 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     print("Processing train set")
     test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
 
-    activate_topk = true
+    activate_topk = opt.activate_topk --true
   else
     print("Processing val set using in-memory model")
     test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
