@@ -399,7 +399,14 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     local inputs = tests_con
     local answer = tests_ans
     local in_words = inputs[1][1]
-    local outputs = mask_attention(in_words, model:forward(inputs)[1], topk_answers[i])
+    local outpre
+    if opt.ent_feats and opt.multitask then
+      outpre = model:forward(inputs)[1]
+    else
+      outpre = model:forward(inputs)
+    end
+    --local outputs = mask_attention(in_words, model:forward(inputs)[1], topk_answers[i])
+    local outputs = mask_attention(in_words, outpre, topk_answers[i])
 
     local predictions = answer.new():resizeAs(answer):zero()
     local truth = {}
@@ -904,7 +911,7 @@ function train(params, grad_params, epoch)
       if opt.ent_feats and opt.multitask then
         sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
       end
-      print("ey", sumErr)
+      --print("ey", sumErr)
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..
