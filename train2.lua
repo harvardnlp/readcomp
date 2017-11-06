@@ -1071,11 +1071,16 @@ for i = 1, data.stopwords:size(1) do
 end
 
 vocab_size = data.vocab_size[1]
-post_vocab_size = data.post_vocab_size[1]
-ner_vocab_size  = data.ner_vocab_size [1]
-sent_vocab_size = data.sent_vocab_size[1]
-spee_vocab_size = data.spee_vocab_size[1]
-extr_size = data.train_extr:size(2)
+post_vocab_size = opt.std_feats and data.post_vocab_size[1] or -1
+ner_vocab_size  = opt.ent_feats and data.ner_vocab_size [1] or -1
+sent_vocab_size = opt.disc_feats and data.sent_vocab_size[1] or -1
+spee_vocab_size = opt.speaker_feats and data.spee_vocab_size[1] or -1
+if opt.std_feats or opt.ent_feats then
+  extr_size = data.train_extr:size(2)
+else
+  extr_size = -1
+end
+
 
 -- store the top-k predictions to be used at the next epoch
 topk_train = nil
