@@ -192,7 +192,7 @@ class Corpus(object):
     print_msg('Loading train data ...', 1, self.args_verbose_level)
     self.train   = self.tokenize(os.path.join(path, train),   training = True)
     print_msg('Loading validation data...', 1, self.args_verbose_level)
-    self.valid   = self.tokenize(os.path.join(path, valid),   training = True)
+    self.valid   = self.tokenize(os.path.join(path, valid),   training = False)
     print_msg('Loading test data...', 1, self.args_verbose_level)
     self.test    = self.tokenize(os.path.join(path, test),    training = False)
     # print_msg('Loading control data...', 1, self.args_verbose_level)
