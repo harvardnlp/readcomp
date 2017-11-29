@@ -114,7 +114,8 @@ class Dictionary(object):
 class Corpus(object):
   def __init__(self, args_verbose_level, vocab_file, glove_file, glove_size,
                punc_file, stop_word_file, extra_vocab_file, context_target_separator,
-               answer_identifier, std_feats=False, ent_feats=False, disc_feats=False, speaker_feats=False):
+               answer_identifier, std_feats=False, ent_feats=False, disc_feats=False,
+               speaker_feats=False, cbt_mode=False):
     self.args_verbose_level = args_verbose_level
     self.context_target_separator = context_target_separator # special separator token to identify context and target
     self.answer_identifier = answer_identifier
@@ -124,6 +125,7 @@ class Corpus(object):
     self.ent_feats = ent_feats
     self.disc_feats = disc_feats
     self.speaker_feats = speaker_feats
+    self.cbt_mode = cbt_mode
     self.dictify(vocab_file, glove_file, glove_size, punc_file, stop_word_file, extra_vocab_file)
 
 
@@ -150,6 +152,8 @@ class Corpus(object):
             num_glove += 1
             if num_glove == glove_size:
               break
+        if self.cbt_mode: # ensure missing word token is in vocab
+          self.dictionary.add_word('xxxxx')
         print_msg('Done ...', 1, self.args_verbose_level)
 
     if len(self.dictionary) > 0:
@@ -231,6 +235,9 @@ class Corpus(object):
       'line_number': [] # line number of example in file
     }
 
+    if self.cbt_mode:
+      data['choices'] = []
+
     if self.std_feats:
       data['post'] = []
       data['extr'] = []
@@ -258,6 +265,8 @@ class Corpus(object):
     if self.speaker_feats:
       sorted_data['sid'] = data['speaker_id']
       sorted_data['speech'] = data['speech']
+    if self.cbt_mode:
+      sorted_data['choices'] = data['choices']
 
     loc = np.array([np.array(data['offsets']), np.array(data['context_length']), np.array(data['line_number'])]).T
     loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
@@ -294,6 +303,12 @@ class Corpus(object):
           words.pop(target_answer_separator_index)
           groups.pop(target_answer_separator_index)
 
+        choices = None
+        if self.cbt_mode:
+          choices = words[-1].split('|')
+          assert len(choices) == 10
+          words = words[:-1]
+
         num_words = len(words)
         pos_tags = [t[1] for t in nltk.pos_tag(words)]
 
@@ -323,6 +338,10 @@ class Corpus(object):
         data['offsets'].append(len(data['data']) + 1)
         data['context_length'].append(num_words - 1)
         data['line_number'].append(num_lines_in_file)
+
+        if self.cbt_mode: # make sure choices are in dict so we don't do unk things
+          [self.dictionary.add_word(choice) for choice in choices]
+          data['choices'].append([self.dictionary.word2idx[choice] for choice in choices])
 
         words = [word if word in self.dictionary.word2idx else UNKNOWN for word in words]
 

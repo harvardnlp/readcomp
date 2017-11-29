@@ -62,6 +62,7 @@ cmd:option('--std_feats', false, 'use standard features')
 cmd:option('--ent_feats', false, 'use entity features')
 cmd:option('--disc_feats', false, 'use discourse features')
 cmd:option('--speaker_feats', false, 'use speaker features')
+cmd:option('--use_choices', false, 'limit to choices when available')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 64, 'number of examples per batch')
 cmd:option('--savepath', 'models', 'path to directory where experiment log (includes model) will be saved')
@@ -194,7 +195,8 @@ function allocate_data(max_context_length, batchsize)
   lineno = lineno and lineno:resize(opt.batchsize):zero() or torch.LongTensor(opt.batchsize):zero()
 end
 
-function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent, tensor_spee, tensor_extr, tensor_location, eval_heuristics, batch_index)
+function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent,
+                  tensor_spee, tensor_extr, tensor_location, tensor_choices, eval_heuristics, batch_index)
   -- pos_tags are features for both context and target
   -- extra features only apply to context (e.g. frequency of token in context)
   local num_examples = tensor_location:size(1)
@@ -263,6 +265,13 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent,
       for aid = 1, max_context_length do
         if context[aid][idx] == cur_answer then
           answer_ind[idx][#answer_ind[idx] + 1] = aid
+        end
+      end
+
+      if use_choices then
+        batch_choices[idx] = {} -- reset
+        for cc = 1, tensor_choices:size(2) do
+          batch_choices[idx][tensor_choices[iexample][cc]] = true
         end
       end
 
@@ -370,6 +379,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   tensor_speech   = tensor_speech   and tensor_speech   or data.test_speech
   tensor_extr     = tensor_extr     and tensor_extr     or data.test_extr
   tensor_location = tensor_location and tensor_location or data.test_location
+  tensor_choices  = tensor_choices  and tensor_choices  or data.tensor_choices
 
   local all_batches = torch.range(1, tensor_location:size(1), opt.batchsize)
   local ntestbatches = all_batches:size(1)
@@ -395,7 +405,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   local scorek = {}
   local num_examples = 0
   for i = 1, ntestbatches do
-    local tests_con, tests_ans, tests_ans_ind, tests_lineno = loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sentence, tensor_speech, tensor_extr, tensor_location, false, all_batches[i])
+    local tests_con, tests_ans, tests_ans_ind, tests_lineno = loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sentence, tensor_speech, tensor_extr, tensor_location, tensor_choices, false, all_batches[i])
 
     local inputs = tests_con
     local answer = tests_ans
@@ -407,7 +417,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
       outpre = model:forward(inputs)
     end
     --local outputs = mask_attention(in_words, model:forward(inputs)[1], topk_answers[i])
-    local outputs = mask_attention(in_words, outpre, topk_answers[i])
+    local outputs = mask_attention(in_words, outpre, topk_answers[i], batch_choices)
 
     local predictions = answer.new():resizeAs(answer):zero()
     local truth = {}
@@ -673,7 +683,7 @@ function find_element(elem, tensor1d)
   return nil
 end
 
-function mask_attention(input_context, output_pre_attention, topk_answers)
+function mask_attention(input_context, output_pre_attention, topk_answers, choices)
   -- attention while masking out stopwords, punctuations
   for i = 1, input_context:size(1) do -- seqlen
     for j = 1, input_context:size(2) do -- batchsize
@@ -682,6 +692,8 @@ function mask_attention(input_context, output_pre_attention, topk_answers)
         if input_context[i][j] == 0 or not find_element(input_context[i][j], topk_words[topk_words:ne(0)]) then
           output_pre_attention[j][i] = -math.huge
         end
+      elseif use_choices and choices and not choices[j][input_context[i][j]] then
+        output_pre_attention[j][i] = -math.huge
       else
         if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
           output_pre_attention[j][i] = -math.huge
@@ -692,7 +704,7 @@ function mask_attention(input_context, output_pre_attention, topk_answers)
   return attention_layer:forward(output_pre_attention)
 end
 
-function mask_attention_gradients(input_context, output_grad, topk_answers)
+function mask_attention_gradients(input_context, output_grad, topk_answers, choices)
   -- input_context is seqlen x batchsize
   -- output_grad is batchsize x seqlen
   for i = 1, input_context:size(1) do
@@ -702,6 +714,8 @@ function mask_attention_gradients(input_context, output_grad, topk_answers)
         if input_context[i][j] == 0 or not find_element(input_context[i][j], topk_words[topk_words:ne(0)]) then
           output_grad[j][i] = 0
         end
+      elseif use_choices and choices and not choices[j][input_context[i][j]] then
+        output_grad[j][i] = 0
       else
         if input_context[i][j] == 0 or puncs[input_context[i][j]] ~= nil or stopwords[input_context[i][j]] ~= nil then
           output_grad[j][i] = 0
@@ -756,7 +770,7 @@ function train(params, grad_params, epoch)
   for ir = 1,nbatches do
     local a = torch.Timer()
     local inputs, answers, answer_inds, line_nos = loadData(data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr,
-      data.train_location, false, all_batches[randind[ir]])
+      data.train_location, data.train_choices, false, all_batches[randind[ir]])
 
     local context_input = inputs[1][1]
     local ner_input
@@ -836,7 +850,7 @@ function train(params, grad_params, epoch)
 
 
       local previous_topk = topk_train and topk_train[randind[ir]] or nil
-      local outputs = mask_attention(context_input, outputs_pre, previous_topk)
+      local outputs = mask_attention(context_input, outputs_pre, previous_topk, batch_choices)
 
       if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
         -- print('inputs')
@@ -944,7 +958,7 @@ function train(params, grad_params, epoch)
 
       -- backward
       grad_outputs = attention_layer:backward(outputs_pre, grad_outputs)
-      mask_attention_gradients(context_input, grad_outputs, previous_topk)
+      mask_attention_gradients(context_input, grad_outputs, previous_topk, batch_choices)
 
       if opt.ent_feats and opt.multitask then
         grad_ner = crit_ner:backward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
@@ -1007,11 +1021,11 @@ function validate(ntrial, epoch)
   -- for i = 1, 1 do
   for i = 1, nvalbatches do
     local valid_con, valid_ans, valid_ans_ind, valid_lineno = loadData(data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr,
-      data.valid_location, false, all_batches[i])
+      data.valid_location, data.valid_choices, false, all_batches[i])
 
     local inputs = valid_con
     local answer_inds = valid_ans_ind
-    local outputs = mask_attention(inputs[1][1], lm:forward(inputs)[1], topk_valid and topk_valid[all_batches[i]] or nil)
+    local outputs = mask_attention(inputs[1][1], lm:forward(inputs)[1], topk_valid and topk_valid[all_batches[i]] or nil, batch_choices)
     local err = 0
     for ib = 1, opt.batchsize do
       if valid_ans[ib] > 0 and puncs[valid_ans[ib]] == nil and stopwords[valid_ans[ib]] == nil then -- skip 0-padded examples & stopword/punctuation answers
@@ -1088,6 +1102,10 @@ else
   extr_size = -1
 end
 
+use_choices = opt.use_choices and data.train_choices ~= nil
+if use_choices then
+  batch_choices = {}
+end
 
 -- store the top-k predictions to be used at the next epoch
 topk_train = nil

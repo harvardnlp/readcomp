@@ -190,6 +190,8 @@ def main(arguments):
                       help='include discourse focused features')
   parser.add_argument('--speaker_feats', action='store_true',
                       help='include speaker focused features')
+  parser.add_argument('--cbt_mode', action='store_true',
+                      help='include answer choices as in the CBT task')
   parser.add_argument('--out_file', type=str, default='lambada.hdf5',
                       help='output hdf5 file')
   parser.add_argument('--debug_translate', type=str, default='',
@@ -208,7 +210,7 @@ def main(arguments):
   if len(args.debug_translate) or args.validate:
     corpus = datamodel.Corpus(args.verbose_level, None, None, None, None, None, None, None, None,
                               std_feats=args.std_feats, ent_feats=args.ent_feats,
-                              disc_feats=args.disc_feats, speaker_feats=args.speaker_feats)
+                              disc_feats=args.disc_feats, speaker_feats=args.speaker_feats, cbt_mode=args.cbt_mode)
     corpus.load_vocab(out_vocab_file_prefix)
     if args.validate:
       validate(corpus, args.out_file)
@@ -220,13 +222,13 @@ def main(arguments):
                                 args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None,
                                 args.context_query_separator, args.answer_identifier,
                                 std_feats=args.std_feats, ent_feats=args.ent_feats,
-                                disc_feats=args.disc_feats, speaker_feats=args.speaker_feats)
+                                disc_feats=args.disc_feats, speaker_feats=args.speaker_feats, cbt_mode=args.cbt_mode)
     else:
       corpus = datamodel.Corpus(args.verbose_level, args.data + args.vocab, None, None, args.data + args.punctuations,
                                 args.data + args.stopwords, args.data + args.extra_vocab if args.extra_vocab else None,
                                 args.context_query_separator, args.answer_identifier,
                                 std_feats=args.std_feats, ent_feats=args.ent_feats,
-                                disc_feats=args.disc_feats, speaker_feats=args.speaker_feats)
+                                disc_feats=args.disc_feats, speaker_feats=args.speaker_feats, cbt_mode=args.cbt_mode)
     corpus.load(args.data, args.train, args.valid, args.test, args.control, args.analysis)
     corpus.save(out_vocab_file_prefix)
 
@@ -287,6 +289,11 @@ def main(arguments):
       if args.std_feats or args.ent_feats:
         f['test_extr']        = np.array(corpus.test['extr'])
       f['test_location']    = np.array(corpus.test['location'])
+
+      if args.cbt_mode:
+        f['train_choices'] = np.array(corpus.train['choices'])
+        f['valid_choices'] = np.array(corpus.valid['choices'])
+        f['test_choices'] = np.array(corpus.test['choices'])
 
       # f['control_data']     = np.array(corpus.control['data'])
       # f['control_post']     = np.array(corpus.control['post'])
