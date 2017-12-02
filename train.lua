@@ -62,7 +62,8 @@ cmd:option('--std_feats', false, 'use standard features')
 cmd:option('--ent_feats', false, 'use entity features')
 cmd:option('--disc_feats', false, 'use discourse features')
 cmd:option('--speaker_feats', false, 'use speaker features')
-cmd:option('--use_choices', false, 'limit to choices when available')
+cmd:option('--use_choices', false, 'limit to choices when available at train time')
+cmd:option('--use_test_choices', false, 'limit to choices when available at test time')
 cmd:option('--testmodel', '', 'the saved model to test')
 cmd:option('--batchsize', 64, 'number of examples per batch')
 cmd:option('--savepath', 'models', 'path to directory where experiment log (includes model) will be saved')
@@ -379,7 +380,7 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
   tensor_speech   = tensor_speech   and tensor_speech   or data.test_speech
   tensor_extr     = tensor_extr     and tensor_extr     or data.test_extr
   tensor_location = tensor_location and tensor_location or data.test_location
-  tensor_choices  = tensor_choices  and tensor_choices  or data.tensor_choices
+  tensor_choices  = tensor_choices  and tensor_choices  or data.test_choices
 
   local all_batches = torch.range(1, tensor_location:size(1), opt.batchsize)
   local ntestbatches = all_batches:size(1)
@@ -684,6 +685,9 @@ function find_element(elem, tensor1d)
 end
 
 function mask_attention(input_context, output_pre_attention, topk_answers, choices)
+  --print(choices[57])
+  --print(input_context:select(2,57))
+  --print("ey", choices)
   -- attention while masking out stopwords, punctuations
   for i = 1, input_context:size(1) do -- seqlen
     for j = 1, input_context:size(2) do -- batchsize
@@ -701,6 +705,10 @@ function mask_attention(input_context, output_pre_attention, topk_answers, choic
       end
     end
   end
+  --print(output_pre_attention[57])
+  --print(output_pre_attention[57]:max())
+  --print(output_pre_attention:max(2))
+  --assert(false)
   return attention_layer:forward(output_pre_attention)
 end
 
@@ -772,6 +780,18 @@ function train(params, grad_params, epoch)
     local inputs, answers, answer_inds, line_nos = loadData(data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr,
       data.train_location, data.train_choices, false, all_batches[randind[ir]])
 
+    --[[
+    for bb = 1, opt.batchsize do
+      print(tostr(inputs[1][1]:select(2, bb)))
+      print(i2w[answers[bb]])
+      for k, v in pairs(batch_choices[bb]) do
+        print(i2w[k])
+      end
+      print("")
+    end
+    assert(false)
+    --]]
+
     local context_input = inputs[1][1]
     local ner_input
     if opt.ent_feats and opt.std_feats then
@@ -826,75 +846,8 @@ function train(params, grad_params, epoch)
         outputs_pre = outputs_joint
       end
 
-
-      -- print('context_input:size()')
-      -- print(context_input:size())
-      -- print('ner_input:size()')
-      -- print(ner_input:size())
-      -- for bb = 1, opt.batchsize do
-      --   print('bb')
-      --   print(bb)
-      --   print('context_input:t()[bb][ner_input:t()[bb]:long():eq(2)]')
-      --   print(context_input:t()[bb][ner_input:t()[bb]:long():eq(2)])
-      -- end
-      -- print('ner_input:t():eq(2):sum(2)')
-      -- print(ner_input:t():eq(2):sum(2))
-      -- print('ner_labels:view(opt.batchsize, opt.entity)')
-      -- print(ner_labels:view(opt.batchsize, opt.entity))
-      -- print('outputs_ner')
-      -- print(outputs_ner)
-      -- ner_input:foo()
-
-
-
-
-
       local previous_topk = topk_train and topk_train[randind[ir]] or nil
       local outputs = mask_attention(context_input, outputs_pre, previous_topk, batch_choices)
-
-      if opt.verbose and ir % 10 == 1 and opt.model == 'crf' then
-        -- print('inputs')
-        -- print(inputs[{{},2}]:contiguous():view(1,-1))
-        -- print('targets')
-        -- print(targets[1][{{},2}]:contiguous():view(1,-1))
-        -- print(targets[2][{{},2}]:contiguous():view(1,-1))
-
-        for inode,node in ipairs(lm.forwardnodes) do
-          -- if node.data.annotations.name == 'Yd' then
-          --   print(node.data.annotations.name)
-          --   print(node.data.module.output[{2}])
-          --   print(node.data.annotations.name)
-          -- end
-          -- if node.data.annotations.name == 'u' then
-          --   print(node.data.annotations.name)
-          --   print(node.data.module.output:squeeze()[{2}]:view(1,-1))
-          --   print(node.data.annotations.name)
-          -- end
-          -- if node.data.annotations.name == 'Joint' then
-          --   print(node.data.annotations.name)
-          --   print(node.data.module.output:squeeze()[{2}]:view(1,-1))
-          --   print(node.data.annotations.name)
-          -- end
-          if node.data.annotations.name == 'CRF' then
-            local crftheta = node.data.module.output
-            print('crftheta')
-            print(crftheta)
-          end
-          if node.data.annotations.name == 'Theta' or node.data.annotations.name == 'CRF' then
-            local o = node.data.module.output
-            print(node.data.annotations.name..' min = '..o:min()..', max = '..o:max()..', avg = '..o:mean())
-            -- print(node.data.annotations.name)
-            -- print(node.data.module.output[{{},{},1}])
-            -- print(node.data.module.output[{{},{},2}])
-            -- print(node.data.annotations.name)
-          end
-          -- if node.data.annotations.name == 'NOM' then
-          --   print(node.data.annotations.name)
-          --   print(node.data.module.output:squeeze())
-          --   print(node.data.annotations.name)
-          -- end
-        end
-      end
 
       grad_outputs:resize(opt.batchsize, outputs:size(2)):zero()
       grad_ner:zero()
@@ -925,7 +878,7 @@ function train(params, grad_params, epoch)
       if opt.ent_feats and opt.multitask then
         sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
       end
-      --print("ey", sumErr)
+      print("ey", sumErr)
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..
@@ -1103,7 +1056,7 @@ else
 end
 
 use_choices = opt.use_choices and data.train_choices ~= nil
-if use_choices then
+if use_choices or opt.use_test_choices then
   batch_choices = {}
 end
 
@@ -1169,14 +1122,34 @@ local adamconfig = {
    learningRate = opt.lr
 }
 
+-- for debugging...
+stringx = require('pl.stringx')
+i2w = {}
+for line in io.lines('CN_cbt.vocab') do
+  local fields = stringx.split(line, '\t')
+  i2w[tonumber(fields[1])] = fields[2]
+end
+
+function tostr(x)
+  local tbl = {}
+  for i = 1, x:size(1) do
+    table.insert(tbl, i2w[x[i]])
+  end
+  return stringx.join(' ', tbl)
+end
+    
+
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
   print("Epoch #"..epoch.." :")
 
+  if not opt.use_choices then use_choices = false end
+  
   train(params, grad_params, epoch)
   if opt.maxepoch > 1 then
     --validate(ntrial, epoch)
     -- get acc on validation
+    if opt.use_test_choices then use_choices = true end
     local validacc = test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
     xplog.validacc[epoch] = validacc
     --xplog.valloss[epoch] = validloss
@@ -1205,11 +1178,13 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     activate_topk = opt.activate_topk --true
     if activate_topk then
       print("Processing train set")
+      if opt.use_test_choices then use_choices = true end
       test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
     end
 
   else
     print("Processing val set using in-memory model")
+    if opt.use_test_choices then use_choices = true end
     test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
     print("Processing test set using in-memory model")
     test_model() -- test using in-memory model in case of single epoch (faster than saving/reloading)
@@ -1219,5 +1194,6 @@ end
 
 if opt.maxepoch > 1 then
   print("Processing test set using best model on validation")
+  if opt.use_test_choices then use_choices = true end
   test_model(paths.concat(opt.savepath, opt.id..'.t7'))
 end
