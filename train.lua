@@ -349,7 +349,8 @@ function loadData(tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sent,
   return contexts, answer, answer_ind, lineno
 end
 
-function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tensor_ner, tensor_sid, tensor_sentence, tensor_speech, tensor_extr, tensor_location)
+function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tensor_ner,
+                    tensor_sid, tensor_sentence, tensor_speech, tensor_extr, tensor_location, tensor_choices)
   if not model then
     batch_size = opt.batchsize
     model = lm
@@ -1072,7 +1073,7 @@ if #opt.testmodel > 0 then
   -- test_model(opt.testmodel, 'analysis', data.analysis_data, data.analysis_post, data.analysis_ner, data.analysis_sentence, data.analysis_speech, data.analysis_extr, data.analysis_location)
 
   print("Processing validation set")
-  test_model(opt.testmodel, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
+  test_model(opt.testmodel, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location, data.valid_choices)
   os.exit()
 end
 
@@ -1137,20 +1138,20 @@ function tostr(x)
   end
   return stringx.join(' ', tbl)
 end
-    
+
 
 while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
   print("")
   print("Epoch #"..epoch.." :")
 
   if not opt.use_choices then use_choices = false end
-  
+
   train(params, grad_params, epoch)
   if opt.maxepoch > 1 then
     --validate(ntrial, epoch)
     -- get acc on validation
     if opt.use_test_choices then use_choices = true end
-    local validacc = test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
+    local validacc = test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location, data.valid_choices)
     xplog.validacc[epoch] = validacc
     --xplog.valloss[epoch] = validloss
     ntrial = ntrial + 1
@@ -1179,13 +1180,13 @@ while opt.maxepoch <= 0 or epoch <= opt.maxepoch do
     if activate_topk then
       print("Processing train set")
       if opt.use_test_choices then use_choices = true end
-      test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location)
+      test_model(nil, 'train', data.train_data, data.train_post, data.train_ner, data.train_extr, data.train_location, data.train_choices)
     end
 
   else
     print("Processing val set using in-memory model")
     if opt.use_test_choices then use_choices = true end
-    test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location)
+    test_model(nil, 'validation', data.valid_data, data.valid_post, data.valid_ner, data.valid_sid, data.valid_sentence, data.valid_speech, data.valid_extr, data.valid_location, data.valid_choices)
     print("Processing test set using in-memory model")
     test_model() -- test using in-memory model in case of single epoch (faster than saving/reloading)
   end
