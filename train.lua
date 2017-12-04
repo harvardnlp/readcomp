@@ -584,8 +584,10 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
     local brnn = nn.SeqBRNNP(in_size, hiddensize, opt.rnntype, opt.projsize, false, nn.JoinTable(3))
     brnn:MaskZero(true)
     doc_rnn:add(brnn)
-    if opt.dropout > 0 then
+    if i < #opt.hiddensize and opt.dropout > 0 then
       doc_rnn:add(nn.Dropout(opt.dropout))
+    else
+      print("no dropout on last gru layer!")
     end
     in_size = 2 * hiddensize
   end
@@ -781,17 +783,15 @@ function train(params, grad_params, epoch)
     local inputs, answers, answer_inds, line_nos = loadData(data.train_data, data.train_post, data.train_ner, data.train_sid, data.train_sentence, data.train_speech, data.train_extr,
       data.train_location, data.train_choices, false, all_batches[randind[ir]])
 
-    --[[
-    for bb = 1, opt.batchsize do
-      print(tostr(inputs[1][1]:select(2, bb)))
-      print(i2w[answers[bb]])
-      for k, v in pairs(batch_choices[bb]) do
-        print(i2w[k])
-      end
-      print("")
-    end
-    assert(false)
-    --]]
+    --for bb = 1, opt.batchsize do
+    --  print(tostr(inputs[1][1]:select(2, bb)))
+    --  print(i2w[answers[bb]])
+    --  for k, v in pairs(batch_choices[bb]) do
+    --    print(i2w[k])
+    --  end
+    --  print("")
+    --end
+    --assert(false)
 
     local context_input = inputs[1][1]
     local ner_input
@@ -862,6 +862,7 @@ function train(params, grad_params, epoch)
           for ians = 1, #answer_inds[ib] do
             prob_answer = prob_answer + outputs[ib][answer_inds[ib][ians]]
           end
+	  --assert(prob_answer <= 1)
           if prob_answer ~= 0 then
             for ians = 1, #answer_inds[ib] do
               grad_outputs[ib][answer_inds[ib][ians]] = -1 / (opt.batchsize * prob_answer)
@@ -879,7 +880,7 @@ function train(params, grad_params, epoch)
       if opt.ent_feats and opt.multitask then
         sumErr = sumErr + crit_ner:forward(outputs_ner, ner_labels:view(opt.batchsize * opt.entity))
       end
-      print("ey", sumErr)
+      --print("ey", sumErr)
 
       if opt.verbose then
         print('grad_outputs: min = ' .. grad_outputs:min() ..

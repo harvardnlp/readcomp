@@ -54,7 +54,7 @@ function MaskZeroSeqBRNNFinal:getFirstLastNonZeroRow(input, seqlen, hiddensize)
    local lastNonzeroExample = 0
 
    for s = 1, seqlen do
-      for h = 1, hiddensize do
+      for h = 1, 5 do --hiddensize do
          if firstNonzeroExample == 0 and input[s][h] ~= 0 then
             firstNonzeroExample = s
          end

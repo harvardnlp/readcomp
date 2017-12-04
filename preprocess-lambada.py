@@ -291,9 +291,9 @@ def main(arguments):
       f['test_location']    = np.array(corpus.test['location'])
 
       if args.cbt_mode:
-        f['train_choices'] = np.array(corpus.train['choices'])
-        f['valid_choices'] = np.array(corpus.valid['choices'])
-        f['test_choices'] = np.array(corpus.test['choices'])
+        f['train_choices'] = corpus.train['choices'] #np.array(corpus.train['choices'])
+        f['valid_choices'] = corpus.valid['choices'] # np.array(corpus.valid['choices'])
+        f['test_choices'] = corpus.test['choices'] #np.array(corpus.test['choices'])
 
       # f['control_data']     = np.array(corpus.control['data'])
       # f['control_post']     = np.array(corpus.control['post'])

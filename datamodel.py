@@ -265,12 +265,14 @@ class Corpus(object):
     if self.speaker_feats:
       sorted_data['sid'] = data['speaker_id']
       sorted_data['speech'] = data['speech']
-    if self.cbt_mode:
-      sorted_data['choices'] = data['choices']
 
     loc = np.array([np.array(data['offsets']), np.array(data['context_length']), np.array(data['line_number'])]).T
-    loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
+    sidxs = np.argsort(-loc[:,1])
+    loc = loc[sidxs]
+    #loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
     sorted_data['location'] = loc
+    if self.cbt_mode:
+      sorted_data['choices'] = np.array(data['choices'])[sidxs]    
     return sorted_data
 
 
@@ -306,7 +308,12 @@ class Corpus(object):
         choices = None
         if self.cbt_mode:
           choices = words[-1].split('|')
-          assert len(choices) == 10
+          if len(choices) < 10:
+            print words
+            print choices
+          assert len(choices) >= 10
+          # there is at least one example where the empty string is a choice
+          choices = [nug for nug in choices if len(nug) > 0][:10]
           words = words[:-1]
 
         num_words = len(words)
@@ -315,14 +322,14 @@ class Corpus(object):
         answer = words[num_words - 1]
         self.dictionary.add_word(answer) # make sure the answer is in vocab
 
-        if answer in self.dictionary.punc2idx or answer in self.dictionary.stop2idx:
+        if not self.cbt_mode and (answer in self.dictionary.punc2idx or answer in self.dictionary.stop2idx):
           puncstop_answer_count += 1
           if training:
             print_msg(u'INFO: SKIPPING... Target-Answer is either a stop word or punctuation, line = {}'.format(line), 2, self.args_verbose_level)
             continue
 
         if training:
-          if re.search('[a-z]', answer) == None:
+          if not self.cbt_mode and re.search('[a-z]', answer) == None:
             print_msg(u'INFO: SKIPPING... Target-Answer is not valid, line = {}'.format(line), 2, self.args_verbose_level)
             continue
 
@@ -331,7 +338,8 @@ class Corpus(object):
           for i in range(0, num_words - 1):
             if answer == words[i]:
               found_answer = True
-          if not found_answer:
+              break
+          if not self.cbt_mode and not found_answer:
             print_msg('INFO: SKIPPING... Target answer not found in context', 2, self.args_verbose_level)
             continue
 
@@ -344,6 +352,18 @@ class Corpus(object):
           data['choices'].append([self.dictionary.word2idx[choice] for choice in choices])
 
         words = [word if word in self.dictionary.word2idx else UNKNOWN for word in words]
+        if self.cbt_mode:
+          if self.dictionary.word2idx[answer] != self.dictionary.word2idx[words[-1]]:
+            print answer, words[-1], self.dictionary.word2idx[words[-1]]
+            assert False
+          #assert self.dictionary.word2idx[answer] == words[-1]
+          if not any(chc == self.dictionary.word2idx[answer] for chc in data['choices'][-1]):
+            print [w for w in words]
+            print [c for c in choices]
+            assert False
+          if not any(self.dictionary.word2idx[w] == self.dictionary.word2idx[answer] for w in words[:-1]):
+            print [w for w in words]
+            assert False
 
         sentence_number = 1
         speech_number = 1 # if not in speech/conversation use 1
@@ -405,7 +425,11 @@ class Corpus(object):
             if self.answer_identifier: # if location of answer is identified in the query (e.g. for CNN dataset)
               if num_lines_in_file == 1 and i == 0:
                 print_msg('INFO: Using answer identifier token = {}'.format(self.answer_identifier), 1, self.args_verbose_level)
-              answer_index = words.index(self.answer_identifier)
+              try:
+                answer_index = words.index(self.answer_identifier)
+              except ValueError:
+                print words
+                assert False
 
               # make sure the previous and next ngrams of the token are actually in the context
               # and vice versa for the target answer
