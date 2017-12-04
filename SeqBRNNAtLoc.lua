@@ -18,6 +18,7 @@ function SeqBRNNAtLoc:setStuff(seqinp, tens_loc, bidx)
 end
 
 function SeqBRNNAtLoc:getAnsLoc(b)
+  print(self.tens_loc:size(1), self.tens_loc:size(2), self.batch_idx, b) 
   local cur_offset = self.tens_loc[self.batch_idx+b-1][1]
   local cur_context_length = self.tens_loc[self.batch_idx+b-1][2]
   local ans_loc = cur_offset + cur_context_length
@@ -81,6 +82,9 @@ function SeqBRNNAtLoc:getBeforeAfterRows(seqlen, answer_loc)
    -- seqlen is the number of RNN states
    local beforeLocIdx = 0
    local afterLocIdx = 0
+   --print("fuckoff", answer_loc, seqlen)
+   --print(self.seqinp[{{answer_loc-seqlen,answer_loc}}])
+   --print("")
 
    for s = 1, seqlen do -- start at answer
      if self.seqinp[answer_loc-s] == self.qidx then

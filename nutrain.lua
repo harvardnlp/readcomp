@@ -46,7 +46,7 @@ cmd:option('--uniform', 0.1, 'initialize parameters using uniform distribution b
 cmd:option('--continue', '', 'path to model for which training should be continued. Note that current options (except for device, cuda) will be ignored.')
 cmd:option('--multitask', false, 'also predict speaker stuff') --TODO: add a coefficient
 cmd:option('--activate_topk', false, 'attn narrowing')
-cmd:option('--query_idx', 125269, 'random seed')
+cmd:option('--query_idx', 56298, 'random seed')
 -- rnn layer
 cmd:option('--inputsize', -1, 'size of lookup table embeddings. -1 defaults to hiddensize[1]')
 cmd:option('--postsize', 80, 'size of pos_tag embeddings')
@@ -1135,7 +1135,7 @@ local adamconfig = {
 -- for debugging...
 stringx = require('pl.stringx')
 i2w = {}
-for line in io.lines('CN_cbt.vocab') do
+for line in io.lines('CN_cbt2.vocab') do
   local fields = stringx.split(line, '\t')
   i2w[tonumber(fields[1])] = fields[2]
 end

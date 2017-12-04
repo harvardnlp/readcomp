@@ -1127,7 +1127,7 @@ local adamconfig = {
 -- for debugging...
 stringx = require('pl.stringx')
 i2w = {}
-for line in io.lines('CN_cbt.vocab') do
+for line in io.lines('CN_cbt2.vocab') do
   local fields = stringx.split(line, '\t')
   i2w[tonumber(fields[1])] = fields[2]
 end
