@@ -18,11 +18,15 @@ function SeqBRNNAtLoc:setStuff(seqinp, tens_loc, bidx)
 end
 
 function SeqBRNNAtLoc:getAnsLoc(b)
-  print(self.tens_loc:size(1), self.tens_loc:size(2), self.batch_idx, b) 
-  local cur_offset = self.tens_loc[self.batch_idx+b-1][1]
-  local cur_context_length = self.tens_loc[self.batch_idx+b-1][2]
-  local ans_loc = cur_offset + cur_context_length
-  return ans_loc
+  --print(self.tens_loc:size(1), self.tens_loc:size(2), self.batch_idx, b)
+  if self.batch_idx + b - 1 <= self.tens_loc:size(1) then
+    local cur_offset = self.tens_loc[self.batch_idx+b-1][1]
+    local cur_context_length = self.tens_loc[self.batch_idx+b-1][2]
+    local ans_loc = cur_offset + cur_context_length
+    return ans_loc
+  else
+    return -1
+  end
 end
 
 function SeqBRNNAtLoc:updateOutput(input)
@@ -37,7 +41,10 @@ function SeqBRNNAtLoc:updateOutput(input)
 
    for b = 1, batchsize do
       local ans_loc = self:getAnsLoc(b)
-      beforeLocIdx, afterLocIdx = self:getBeforeAfterRows(seqlen, ans_loc)
+      if ans_loc == -1 then -- returned if we're over
+        break
+      end
+      local beforeLocIdx, afterLocIdx = self:getBeforeAfterRows(seqlen, ans_loc)
       --firstNonzeroExample, lastNonzeroExample = self:getFirstLastNonZeroRow(input[b], seqlen, hiddensize)
       -- before is always kosher
       self.output[{b, {1, hiddensize}}] = input[{b, beforeLocIdx, {1, hiddensize}}]
@@ -63,7 +70,10 @@ function SeqBRNNAtLoc:updateGradInput(input, gradOutput)
 
    for b = 1, batchsize do
      local ans_loc = self:getAnsLoc(b)
-     beforeLocIdx, afterLocIdx = self:getBeforeAfterRows(seqlen, ans_loc)
+     if ans_loc == -1 then
+       break
+     end
+     local beforeLocIdx, afterLocIdx = self:getBeforeAfterRows(seqlen, ans_loc)
      self.gradInput[{b, beforeLocIdx, {1, hiddensize}}] = gradOutput[{b, {1, hiddensize}}]
      if afterLocIdx <= seqlen then
        self.gradInput[{b, afterLocIdx, {hiddensize + 1, hiddensize2}}] = gradOutput[{b, {hiddensize + 1, hiddensize2}}]
