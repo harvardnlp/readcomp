@@ -402,6 +402,13 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     end
   end
 
+  local outpredfi
+  if saved_model_file then
+    local out_preds_finame = string.format('%s.%s.dump', saved_model_file, dump_name)
+    outpredfi = io.open(out_preds_finame, "w")
+  end
+
+
   local correct = 0
   local correct_top2 = 0
   local correct_top3 = 0
@@ -447,6 +454,11 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
         local max_prob = topk_preds[1][2]
         if max_word == answer[b] then
           correct = correct + 1
+          if saved_model_file then
+            outpredfi:write(tests_lineno[b], 1, "\n")
+          end
+        elseif saved_model_file then
+          outpredfi:write(tests_lineno[b], 0, "\n")
         end
         local answer_in_context, answer_rank = find_element(answer[b], topk_preds[{{},1}])
         if answer_in_context then
@@ -472,18 +484,18 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
       end
     end
 
-    if saved_model_file then
-      local out_dump_file = string.format('%s.%s.%03d.dump', saved_model_file, dump_name, i)
-      local out_file = hdf5.open(out_dump_file, 'w')
-      local inp = in_words:long()
-      local out = outputs:double()
-      out_file:write('inputs', inp)
-      out_file:write('outputs', out)
-      out_file:write('predictions', predictions)
-      out_file:write('answers', answer)
-      out_file:write('lineno', tests_lineno)
-      out_file:close()
-    end
+    -- if saved_model_file then
+    --   local out_dump_file = string.format('%s.%s.%03d.dump', saved_model_file, dump_name, i)
+    --   local out_file = hdf5.open(out_dump_file, 'w')
+    --   local inp = in_words:long()
+    --   local out = outputs:double()
+    --   out_file:write('inputs', inp)
+    --   out_file:write('outputs', out)
+    --   out_file:write('predictions', predictions)
+    --   out_file:write('answers', answer)
+    --   out_file:write('lineno', tests_lineno)
+    --   out_file:close()
+    -- end
 
     if opt.progress then
       xlua.progress(i, ntestbatches)
@@ -508,6 +520,9 @@ function test_model(saved_model_file, dump_name, tensor_data, tensor_post, tenso
     print('Rank ' .. k .. ' - mean = ' .. tensork:mean() .. ', min = ' .. tensork:min() .. ', max = ' .. tensork:max() .. ', std = ' .. tensork:std() .. ', count = ' .. tensork:size(1))
   end
 
+  if saved_model_file then
+    outpredfi:close()
+  end
   collect_track_garbage()
   return accuracy
 end
@@ -1071,7 +1086,9 @@ topk_test  = nil
 
 if #opt.testmodel > 0 then
   print("Processing test set")
-  test_model(opt.testmodel)
+  if opt.eval_on_test then
+    test_model(opt.testmodel)
+  end
   -- print("Processing analysis set")
   -- test_model(opt.testmodel, 'analysis', data.analysis_data, data.analysis_post, data.analysis_ner, data.analysis_sentence, data.analysis_speech, data.analysis_extr, data.analysis_location)
 
