@@ -76,6 +76,7 @@ cmd:option('--randomseed', 101, 'random seed')
 
 -- unit test
 cmd:option('--unittest', false, 'enable unit tests')
+cmd:option('--topdrop', false, '')
 
 cmd:text()
 local opt = cmd:parse(arg or {})
@@ -588,7 +589,7 @@ function build_doc_rnn(use_lookup, in_size, in_post_size, in_ner_size, in_sent_s
     local brnn = nn.SeqBRNNP(in_size, hiddensize, opt.rnntype, opt.projsize, false, nn.JoinTable(3))
     brnn:MaskZero(true)
     doc_rnn:add(brnn)
-    if i < #opt.hiddensize and opt.dropout > 0 then
+    if opt.dropout > 0 and (opt.topdrop or i < #opt.hiddensize) then
       doc_rnn:add(nn.Dropout(opt.dropout))
     else
       print("no dropout on last gru layer!")

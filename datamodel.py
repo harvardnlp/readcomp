@@ -350,6 +350,19 @@ class Corpus(object):
         if self.cbt_mode: # make sure choices are in dict so we don't do unk things
           [self.dictionary.add_word(choice) for choice in choices]
           data['choices'].append([self.dictionary.word2idx[choice] for choice in choices])
+          if len(data['choices'][-1]) != 10:
+            lst_choices = data['choices'][-1]
+            lst_choices.extend([lst_choices[-1]]*(10 - len(lst_choices)))
+            print "had to add shit to the choices...."
+            #print choices
+            #print words
+            #assert False
+          #if not all(isinstance(thing, int) for thing in data['choices'][-1]):
+            #print choices
+            #print words
+            #print data['choices'][-1]
+            #assert False
+          assert len(data['choices'][-1]) == 10
 
         words = [word if word in self.dictionary.word2idx else UNKNOWN for word in words]
         if self.cbt_mode:
