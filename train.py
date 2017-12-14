@@ -1,20 +1,27 @@
 """
 pytorch reimplementation of urrthing
 """
+import argparse
+from collections import defaultdict
+
 import torch
 import torch.nn as nn
+import torch.optim as optim
 from torch.autograd import Variable
-import h5py
+
+import datastuff
 
 class Reader(nn.Module):
     """
     attn sum style reader dealie
     """
-    def __init__(self, word_embs, opt):
+    def __init__(self, word_embs, words_new2old, opt):
         super(Reader, self).__init__()
         self.wlut = nn.Embedding(opt.wordtypes, opt.emb_size)
-        self.flut = nn.Embedding(opt.ftypes, opt.emb_size if opt.add_inp else opt.feat_size)
-        self.splut = nn.Embedding(opt.sptypes, opt.emb_size if opt.add_inp else opt.sp_size)
+        if opt.std_feats:
+            self.flut = nn.Embedding(opt.ftypes, opt.emb_size if opt.add_inp else opt.feat_size)
+        if opt.speaker_feats:
+            self.splut = nn.Embedding(opt.sptypes, opt.emb_size if opt.add_inp else opt.sp_size)
         self.emb_size, self.rnn_size, self.add_inp = opt.emb_size, opt.rnn_size, opt.add_inp
         self.std_feats, self.speaker_feats = opt.std_feats, opt.speaker_feats
         insize = opt.emb_size
@@ -23,18 +30,56 @@ class Reader(nn.Module):
         if opt.speaker_feats and not opt.add_inp:
             insize += opt.sp_size
         self.doc_rnn = nn.GRU(insize, opt.rnn_size, opt.layers, bidirectional=True)
-        self.query_rnn = nn.GRU(insize, opt.rnn_size, opt.layers)
+        self.query_rnn = nn.GRU(insize, opt.rnn_size, opt.layers, bidirectional=True)
         self.drop = nn.Dropout(opt.dropout)
         if opt.add_inp:
             self.extr_lin = nn.Linear(opt.extra_size, opt.emb_size)
         else:
-            self.extr_mul = nn.Parameter(torch.Tensor(1, 1, opt.extra_size))
+            self.extr_mul = nn.Parameter(
+                torch.Tensor(1, 1, opt.extra_size).uniform_(-opt.initrange, opt.initrange))
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
         self.softmax = nn.Softmax()
-        self.init_weights(word_embs)
+        self.initrange = opt.initrange
+        self.init_weights(word_embs, words_new2old)
+        self.mt_loss = opt.mt_loss
+        self.topdrop = opt.topdrop
 
-    def init_weights(self, word_embs):
-        assert False
+    def init_weights(self, word_embs, words_new2old):
+        """
+        (re)init weights
+        """
+        initrange = self.initrange
+        luts = [self.wlut]
+        if self.std_feats:
+            luts.append(self.flut)
+        if self.speaker_feats:
+            luts.append(self.splut)
+        for lut in luts:
+            lut.weight.data.uniform_(-initrange, initrange)
+
+        rnns = [self.doc_rnn, self.query_rnn]
+        for rnn in rnns:
+            for thing in rnn.parameters():
+                thing.data.uniform_(-initrange, initrange)
+
+        for dec in self.decoders:
+            dec.weight.data.uniform_(-initrange, initrange)
+            dec.bias.data.zero_()
+
+        lins = []
+        if self.add_inp:
+            lins.append(self.extr_lin)
+        if self.mt_loss == "idx-loss":
+            lins.append(self.doc_mt_lin)
+            if self.query_mt:
+                lins.append(self.query_mt_lin)
+        for lin in lins:
+            lin.weight.data.uniform_(-initrange, initrange)
+            lin.bias.data.zero_()
+
+        # do the word embeddings
+        for i in xrange(words_new2old):
+            self.wlut.weight.data[i].copy_(word_embs[words_new2old[i]])
 
     def forward(self, batch):
         """
@@ -44,17 +89,17 @@ class Reader(nn.Module):
         wembs = self.wlut(batch["words"]) # seqlen x bsz -> seqlen x bsz x emb_size
         if self.std_feats:
             # seqlen x bsz x 3 -> seqlen x bsz*3 x emb_size -> seqlen x bsz x 3 x emb_size
-            fembs = self.wlut(batch["feats"].view(seqlen, -1)).view(seqlen, bsz, -1)
+            fembs = self.flut(batch["feats"].view(seqlen, -1)).view(seqlen, bsz, -1)
         if self.speaker_feats:
             # seqlen x bsz x 2 -> seqlen x bsz*2 x emb_size -> seqlen x bsz x 2 x emb_size
             sembs = self.splut(batch["spee_feats"].view(seqlen, -1)).view(
-              seqlen, bsz, -1, self.emb_size)
+                seqlen, bsz, -1, self.emb_size)
         inp = wembs
         if self.add_inp: # mlp the input
             if self.std_feats:
                 ex_size = self.extra_lin(batch["extr"].size(2))
                 inp = (inp + fembs.sum(2)
-                           + self.extr_lin(batch["extr"].view(-1, ex_size)).view(seqlen, bsz, -1))
+                       + self.extr_lin(batch["extr"].view(-1, ex_size)).view(seqlen, bsz, -1))
             if self.speaker_feats:
                 inp = inp + sembs.sum(2)
             if self.std_feats or self.speaker_feats:
@@ -140,6 +185,26 @@ class Reader(nn.Module):
         return doc_mt_preds, query_mt_preds
 
 
+def get_ncorrect(batch, scores):
+    """
+    i'm just gonna brute force this
+    scores - bsz x seqlen
+    answers - bsz
+    """
+    bsz, seqlen = scores.size()
+    words, answers = batch["words"], batch["answers"]
+    ncorrect = 0
+    for b in xrange(bsz):
+        word2prob = defaultdict(float)
+        best, best_prob = -1, -float("inf")
+        for i in xrange(seqlen):
+            word2prob[words[i][b]] += scores[b][i]
+            if word2prob[words[i][b]] > best_prob:
+                best = words[i][b]
+                best_prob = word2prob[words[i][b]]
+        ncorrect += (best == answers[b])
+    return ncorrect
+
 
 def attn_sum_loss(batch, scores):
     """
@@ -152,7 +217,7 @@ def attn_sum_loss(batch, scores):
     return -marg_log_prob_sum
 
 
-xent = nn.CrossEntropyLoss(ignore_index=0)
+xent = nn.CrossEntropyLoss(ignore_index=0, size_average=False)
 
 def multitask_loss1(batch, doc_mt_scores, query_mt_scores):
     """
@@ -167,34 +232,138 @@ def multitask_loss1(batch, doc_mt_scores, query_mt_scores):
     return loss
 
 
-h5dat = h5py.File(args.datafile)
-# keys are:
-# ner_vocab_size, post_vocab_size, punctuations, sent_vocab_size, spee_vocab_size,
-# stopwords, test_data, test_extr, test_location, test_ner, test_post, test_sentence,
-# test_sid, test_speech, train_data, train_extr, train_location, train_ner, train_post,
-# train_sentence, train_sid, train_speech, valid_data, valid_extr, valid_location,
-# valid_ner, valid_post, valid_sentence, valid_sid, valid_speech, vocab_size,
-# word_embeddings'
-datstuff = {}
-for key in h5dat.keys():
-    if key.startswith("train") or key.startswith("valid"):
-        datstuff[key] = torch.from_numpy(h5dat[key][:])
+parser = argparse.ArgumentParser(description='')
+parser.add_argument('-datafile', type=str, default='', help='')
+parser.add_argument('-bsz', type=int, default=64, help='')
+parser.add_argument('-maxseqlen', type=int, default=1024, help='')
+parser.add_argument('-save', type=str, default='', help='path to save the final model')
+parser.add_argument('-load', type=str, default='', help='path to saved model')
 
-vocab_map = [0] # maps new vocab indices to old indices
-rev_vocab_map = {0:0}
-with open(args.reduced_vocab_mapper_fi) as f:
-    for line in f:
-        nu, orig = line.strip().split()
-        nu, orig = int(nu), int(orig)
-        nu += 1 # we started w/ a dummy idx
-        assert nu == len(vocab_map)
-        vocab_map.append(orig)
-        rev_vocab_map[orig] = nu
+parser.add_argument('-std_feats', action='store_true', help='')
+parser.add_argument('-speaker_feats', action='store_true', help='')
+parser.add_argument('-use_choices', action='store_true', help='')
+parser.add_argument('-mt_loss', type=str, default='',
+                    choices=["", "idx-loss", "antecedent-loss"], help='')
+parser.add_argument('-query_mt', action='store_true', help='multitask on query states too')
+parser.add_argument('-mt_step_mode', type=str, default='before-after',
+                    choices=["exact", "before-after", "before"],
+                    help='which rnn states to use when doing mt stuff')
 
-# replace words w/ new vocab
-for key in ['train_data', 'valid_data']:
-    for i in xrange(datstuff[key].size(0)):
-        datstuff[key][i] = rev_vocab_map[datstuff[key][i]]
+parser.add_argument('-emb_size', type=int, default=128, help='size of word embeddings')
+parser.add_argument('-rnn_size', type=int, default=128, help='size of rnn hidden state')
+parser.add_argument('-feat_size', type=int, default=128, help='')
+parser.add_argument('-sp_size', type=int, default=80, help='')
+parser.add_argument('-layers', type=int, default=1, help='num rnn layers')
+parser.add_argument('-add_inp', action='store_true', help='mlp features (instead of concat)')
+parser.add_argument('-dropout', type=float, default=0, help='dropout')
+parser.add_argument('-topdrop', action='store_true', help='dropout on last rnn layer')
+parser.add_argument('-relu', action='store_true', help='relu for input mlp')
 
-# make offsets 0-indexed
-for key in ['train_location', 'valid_location']:
+parser.add_argument('-epochs', type=int, default=4, help='')
+parser.add_argument('-clip', type=float, default=5, help='gradient clipping')
+parser.add_argument('-initrange', type=float, default=0.1, help='uniform init interval')
+parser.add_argument('-seed', type=int, default=3435, help='')
+
+parser.add_argument('-cuda', action='store_true', help='')
+args = parser.parse_args()
+
+
+if __name__ == "__main__":
+    print args
+
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        if not args.cuda:
+            print "WARNING: You have a CUDA device, so you should probably run with -cuda"
+        else:
+            torch.cuda.manual_seed(args.seed)
+
+    # make data
+    data = datastuff.DataStuff(args)
+
+    saved_args, saved_state = None, None
+    if len(args.load) > 0:
+        saved_stuff = torch.load(args.load)
+        saved_args, saved_state = saved_stuff["opt"], saved_stuff["state_dict"]
+        net = Reader(saved_args, data.word_embs, data.words_new2old)
+        net.load_state_dict(saved_state)
+    else:
+        args.wordtypes = len(data.words_new2old)
+        args.ftypes = data.feat_voc_size
+        args.sptypes = data.spee_feat_foc_size
+        args.extra_size = data.extra_size
+        net = Reader(args, data.word_embs, data.words_new2old)
+
+    data.del_word_embs() # just to save memory
+
+    if args.cuda:
+        net = net.cuda()
+
+    optalg = None
+    if args.optim == "adagrad":
+        optalg = optim.Adagrad(net.parameters(), lr=args.lr)
+    else:
+        optalg = optim.Adam(net.parameters(), lr=args.lr, betas=(0.9, 0.999))
+
+    batch_start_idxs = range(0, data.ntrain, args.bsz)
+    val_batch_start_idxs = range(0, data.nvalid, args.bsz)
+
+    def train(epoch):
+        pred_loss, mt_loss, ndocs = 0, 0, 0
+        net.train()
+        trainperm = torch.randperm(len(batch_start_idxs))
+        for batch_idx in xrange(len(batch_start_idxs)):
+            net.zero_grad()
+            batch = data.load_data(batch_start_idxs[trainperm[batch_idx]],
+                                   args, train=True) # a dict
+            bsz = batch["words"].size(1)
+            for k in batch:
+                batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k])
+            word_scores, doc_mt_scores, q_mt_scores = net(batch)
+            lossvar = attn_sum_loss(batch, word_scores)
+            pred_loss += lossvar.data[0]
+            if args.mt_loss == "idx-loss":
+                mt_lossvar = multitask_loss1(batch, doc_mt_scores, q_mt_scores)
+                mt_loss += mt_lossvar.data[0]
+                lossvar = lossvar + mt_lossvar
+            elif args.mt_loss == "antecedent-loss":
+                mt_lossvar = multitask_loss2(batch, doc_mt_scores, q_mt_scores)
+                mt_loss += mt_lossvar.data[0]
+                lossvar = lossvar + mt_lossvar
+            lossvar /= bsz
+            lossvar.backward()
+            torch.nn.utils.clip_grad_norm(net.parameters(), args.clip)
+            optalg.step()
+            ndocs += bsz
+
+            if (batch_idx+1) % args.log_interval == 0:
+                print "batch %d/%d | loss %g | mt-los %g" % (batch_idx+1, len(batch_start_idxs),
+                                                             pred_loss/ndocs, mt_loss/ndocs)
+
+            print "train epoch %d | loss %g | mt-los %g" % (epoch, pred_loss/ndocs, mt_loss/ndocs)
+
+
+    def evaluate(epoch):
+        total, ncorrect = 0, 0
+        for i in xrange(len(val_batch_start_idxs)):
+            batch = data.load_data(val_batch_start_idxs[i], args, train=False) # a dict
+            bsz = batch["words"].size(1)
+            for k in batch:
+                batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
+            word_scores, _, _ = net(batch)
+            ncorrect += get_ncorrect(batch, word_scores)
+            total += bsz
+        acc = float(ncorrect)/total
+        print "val epoch %d | acc: %g (%d / %d)" % (epoch, acc, ncorrect, total)
+        return acc
+
+    best_acc = 0
+    for epoch in xrange(1, args.epochs+1):
+        train(epoch)
+        acc = evaluate(epoch)
+        if acc > best_acc:
+            best_acc = acc
+            if len(args.save) > 0:
+                print "saving to", args.save
+                state = {"opt": args, "state_dict": net.state_dict()}
+                torch.save(state, args.save)
