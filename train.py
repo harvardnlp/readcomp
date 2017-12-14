@@ -26,9 +26,9 @@ class Reader(nn.Module):
         self.std_feats, self.speaker_feats = opt.std_feats, opt.speaker_feats
         insize = opt.emb_size
         if opt.std_feats and not opt.add_inp:
-            insize += opt.feat_size + opt.extra_size
+            insize += 3*opt.feat_size + opt.extra_size
         if opt.speaker_feats and not opt.add_inp:
-            insize += opt.sp_size
+            insize += 2*opt.sp_size
         self.doc_rnn = nn.GRU(insize, opt.rnn_size, opt.layers, bidirectional=True)
         self.query_rnn = nn.GRU(insize, opt.rnn_size, opt.layers, bidirectional=True)
         self.drop = nn.Dropout(opt.dropout)
@@ -89,15 +89,15 @@ class Reader(nn.Module):
         wembs = self.wlut(batch["words"]) # seqlen x bsz -> seqlen x bsz x emb_size
         if self.std_feats:
             # seqlen x bsz x 3 -> seqlen x bsz*3 x emb_size -> seqlen x bsz x 3 x emb_size
-            fembs = self.flut(batch["feats"].view(seqlen, -1)).view(seqlen, bsz, -1)
+            fembs = self.flut(batch["feats"].view(seqlen, -1)).view(seqlen, bsz, -1, self.flut.embedding_dim)
         if self.speaker_feats:
             # seqlen x bsz x 2 -> seqlen x bsz*2 x emb_size -> seqlen x bsz x 2 x emb_size
             sembs = self.splut(batch["spee_feats"].view(seqlen, -1)).view(
-                seqlen, bsz, -1, self.emb_size)
+                seqlen, bsz, -1, self.splut.embedding_dim)
         inp = wembs
         if self.add_inp: # mlp the input
             if self.std_feats:
-                ex_size = self.extra_lin(batch["extr"].size(2))
+                ex_size = batch["extr"].size(2)
                 inp = (inp + fembs.sum(2)
                        + self.extr_lin(batch["extr"].view(-1, ex_size)).view(seqlen, bsz, -1))
             if self.speaker_feats:
@@ -372,3 +372,4 @@ if __name__ == "__main__":
                 print "saving to", args.save
                 state = {"opt": args, "state_dict": net.state_dict()}
                 torch.save(state, args.save)
+        print
