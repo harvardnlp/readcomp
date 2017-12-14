@@ -40,9 +40,10 @@ class Reader(nn.Module):
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
         self.softmax = nn.Softmax()
         self.initrange = opt.initrange
-        self.init_weights(word_embs, words_new2old)
         self.mt_loss = opt.mt_loss
         self.topdrop = opt.topdrop
+        self.init_weights(word_embs, words_new2old)
+
 
     def init_weights(self, word_embs, words_new2old):
         """
@@ -62,10 +63,6 @@ class Reader(nn.Module):
             for thing in rnn.parameters():
                 thing.data.uniform_(-initrange, initrange)
 
-        for dec in self.decoders:
-            dec.weight.data.uniform_(-initrange, initrange)
-            dec.bias.data.zero_()
-
         lins = []
         if self.add_inp:
             lins.append(self.extr_lin)
@@ -78,8 +75,11 @@ class Reader(nn.Module):
             lin.bias.data.zero_()
 
         # do the word embeddings
-        for i in xrange(words_new2old):
-            self.wlut.weight.data[i].copy_(word_embs[words_new2old[i]])
+        for i in xrange(len(words_new2old)):
+            # words_new2old maps to 1-indexed idxs so need to subtract 1
+            old_idx = words_new2old[i]-1
+            if old_idx < word_embs.size(0):
+                self.wlut.weight.data[i][:word_embs.size(1)].copy_(word_embs[old_idx])
 
     def forward(self, batch):
         """
@@ -114,8 +114,8 @@ class Reader(nn.Module):
             if len(things_to_cat) > 1:
                 inp = torch.cat(things_to_cat, 2) # seqlen x bsz x sum (all the stuff)
 
-        if self.dropout.p > 0:
-            inp = self.dropout(inp)
+        if self.drop.p > 0:
+            inp = self.drop(inp)
 
         doc_states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*rnn_size
         query_states, _ = self.query_rnn(inp) # seqlen x bsz x 2*rnn_size
@@ -124,8 +124,8 @@ class Reader(nn.Module):
         query_rep = torch.cat([query_states[seqlen-1, :, :self.rnn_size],
                                query_states[0, :, self.rnn_size:]], 1) # bsz x 2*rnn_size
 
-        if self.topdrop and self.dropout.p > 0:
-            query_rep = self.dropout(query_rep)
+        if self.topdrop and self.drop.p > 0:
+            query_rep = self.drop(query_rep)
 
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
         scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
@@ -192,13 +192,13 @@ def get_ncorrect(batch, scores):
     answers - bsz
     """
     bsz, seqlen = scores.size()
-    words, answers = batch["words"], batch["answers"]
+    words, answers = batch["words"].data, batch["answers"].data
     ncorrect = 0
     for b in xrange(bsz):
         word2prob = defaultdict(float)
         best, best_prob = -1, -float("inf")
         for i in xrange(seqlen):
-            word2prob[words[i][b]] += scores[b][i]
+            word2prob[words[i][b]] += scores.data[b][i]
             if word2prob[words[i][b]] > best_prob:
                 best = words[i][b]
                 best_prob = word2prob[words[i][b]]
@@ -212,7 +212,7 @@ def attn_sum_loss(batch, scores):
     answers - bsz
     """
     bsz, seqlen = scores.size()
-    mask = batch["answers"].unsqueeze(1).expand(bsz, seqlen).eq(batch["words"].t())
+    mask = batch["answers"].data.unsqueeze(1).expand(bsz, seqlen).eq(batch["words"].data.t())
     marg_log_prob_sum = (scores * Variable(mask.float())).sum(1).log().sum()
     return -marg_log_prob_sum
 
@@ -259,10 +259,13 @@ parser.add_argument('-dropout', type=float, default=0, help='dropout')
 parser.add_argument('-topdrop', action='store_true', help='dropout on last rnn layer')
 parser.add_argument('-relu', action='store_true', help='relu for input mlp')
 
+parser.add_argument('-optim', type=str, default='adam', help='')
+parser.add_argument('-lr', type=float, default=0.001, help='learning rate')
 parser.add_argument('-epochs', type=int, default=4, help='')
 parser.add_argument('-clip', type=float, default=5, help='gradient clipping')
 parser.add_argument('-initrange', type=float, default=0.1, help='uniform init interval')
 parser.add_argument('-seed', type=int, default=3435, help='')
+parser.add_argument('-log_interval', type=int, default=200, help='')
 
 parser.add_argument('-cuda', action='store_true', help='')
 args = parser.parse_args()
@@ -285,14 +288,14 @@ if __name__ == "__main__":
     if len(args.load) > 0:
         saved_stuff = torch.load(args.load)
         saved_args, saved_state = saved_stuff["opt"], saved_stuff["state_dict"]
-        net = Reader(saved_args, data.word_embs, data.words_new2old)
+        net = Reader(data.word_embs, data.words_new2old, saved_args)
         net.load_state_dict(saved_state)
     else:
         args.wordtypes = len(data.words_new2old)
         args.ftypes = data.feat_voc_size
         args.sptypes = data.spee_feat_foc_size
         args.extra_size = data.extra_size
-        net = Reader(args, data.word_embs, data.words_new2old)
+        net = Reader(data.word_embs, data.words_new2old, args)
 
     data.del_word_embs() # just to save memory
 
@@ -313,6 +316,8 @@ if __name__ == "__main__":
         net.train()
         trainperm = torch.randperm(len(batch_start_idxs))
         for batch_idx in xrange(len(batch_start_idxs)):
+            #if batch_idx > 100:
+            #    break
             net.zero_grad()
             batch = data.load_data(batch_start_idxs[trainperm[batch_idx]],
                                    args, train=True) # a dict
@@ -340,7 +345,7 @@ if __name__ == "__main__":
                 print "batch %d/%d | loss %g | mt-los %g" % (batch_idx+1, len(batch_start_idxs),
                                                              pred_loss/ndocs, mt_loss/ndocs)
 
-            print "train epoch %d | loss %g | mt-los %g" % (epoch, pred_loss/ndocs, mt_loss/ndocs)
+        print "train epoch %d | loss %g | mt-los %g" % (epoch, pred_loss/ndocs, mt_loss/ndocs)
 
 
     def evaluate(epoch):

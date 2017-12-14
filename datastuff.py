@@ -35,6 +35,8 @@ class DataStuff(object):
             if key.startswith("train") or key.startswith("valid"):
                 dat[key] = torch.from_numpy(h5dat[key][:])
 
+        # N.B. new2old maps to things in 1-idxd land, so if using corresponding embeddings
+        # need to subtract
         words_new2old, words_old2new = reduce_vocab([dat["train_data"], dat["valid_data"]])
         print "new vocab size:", len(words_new2old)
         self.words_new2old, self.words_old2new = words_new2old, words_old2new
