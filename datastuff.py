@@ -23,7 +23,6 @@ class DataStuff(object):
         self.word_ctx.resize_(max_ctx_len, bsz).zero_()
         self.answers.resize_(bsz).zero_()
         self.linenos.resize_(bsz).zero_()
-        assert False # check whether 0 is really pad...(since we zero above)
 
         if args.std_feats:
             self.feats.resize_(max_ctx_len, bsz, 3).zero_()

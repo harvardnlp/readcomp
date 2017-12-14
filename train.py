@@ -30,7 +30,7 @@ class Reader(nn.Module):
         else:
             self.extr_mul = nn.Parameter(torch.Tensor(1, 1, opt.extra_size))
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
-        self.softmax = nn.SoftMax()
+        self.softmax = nn.Softmax()
         self.init_weights(word_embs)
 
     def init_weights(self, word_embs):
@@ -72,19 +72,73 @@ class Reader(nn.Module):
         if self.dropout.p > 0:
             inp = self.dropout(inp)
 
-        doc_outs, _ = self.doc_rnn(inp) # seqlen x bsz x 2*rnn_size
-        query_outs, _ = self.query_rnn(inp) # seqlen x bsz x 2*rnn_size
-        assert query_outs.size(0) == seqlen
-        query_rep = torch.cat([query_outs[seqlen-1, :, :self.rnn_size],
-                               query_outs[0, :, self.rnn_size:]], 1) # bsz x 2*rnn_size
+        doc_states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*rnn_size
+        query_states, _ = self.query_rnn(inp) # seqlen x bsz x 2*rnn_size
+        assert query_states.size(0) == seqlen
+        # take last forward state and first bwd state
+        query_rep = torch.cat([query_states[seqlen-1, :, :self.rnn_size],
+                               query_states[0, :, self.rnn_size:]], 1) # bsz x 2*rnn_size
 
         if self.topdrop and self.dropout.p > 0:
             query_rep = self.dropout(query_rep)
 
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
-        scores = torch.bmm(doc_outs.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
+        scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
         # TODO: punctuation shit
-        return self.softmax(scores)
+        doc_mt_scores, query_mt_scores = None, None
+        if self.mt_loss == "idx-loss":
+            doc_mt_scores, query_mt_scores = self.get_step_scores(doc_states, query_states)
+        elif self.mt_loss == "antecedent-loss":
+            doc_mt_scores, query_mt_scores = self.get_ant_scores(doc_states, query_states)
+
+        return self.softmax(scores), doc_mt_scores, query_mt_scores
+
+    def get_states_for_step(self, states):
+        """
+        gets the states we want for doing multiclass pred @ time t
+        args:
+          states - seqlen x bsz x 2*rnn_size
+        returns:
+          seqlen*bsz x something
+        """
+        seqlen, bsz, drnn_sz = states.size()
+
+        if not hasattr(self, "dummy"):
+            self.dummy = states.data.new(1, drnn_sz/2).zero_()
+        dummy = self.dummy
+
+        if self.mt_step_mode == "exact":
+            nustates = states.view(-1, drnn_sz) # seqlen*bsz x 2*rnn_size
+        elif self.mt_step_mode == "before-after":
+            dummyvar = Variable(dummy.expand(bsz, drnn_sz/2))
+            # prepend zeros to front, giving seqlen*bsz x rnn_size
+            fwds = torch.cat([dummyvar, states.view(-1, drnn_sz)[:-bsz, :drnn_sz/2]], 0)
+            # append zeros to back, giving seqlen*bsz x rnn_size
+            bwds = torch.cat([states.view(-1, drnn_sz)[bsz:, drnn_sz/2:], dummyvar], 0)
+            nustates = torch.cat([fwds, bwds], 1) # seqlen*bsz x 2*rnn_size
+        elif self.mt_step_mode == "before": # just before
+            dummyvar = Variable(dummy.expand(bsz, drnn_sz/2))
+            # prepend zeros to front, giving seqlen*bsz x rnn_size
+            nustates = torch.cat([dummyvar, states.view(-1, drnn_sz)[:-bsz, :drnn_sz/2]], 0)
+        else:
+            assert False, "%s not a thing" % self.mt_step_mode
+        return nustates
+
+
+    def get_step_scores(self, doc_states, query_states):
+        """
+        doc_states - seqlen x bsz x 2*rnn_size
+        query_states - seqlen x bsz x 2*rnn_size
+        """
+        states_for_step = self.get_states_for_step(doc_states)
+        doc_mt_preds = self.doc_mt_lin(states_for_step) # seqlen*bsz x nclasses
+        if self.query_mt:
+            states_for_qstep = self.get_states_for_step(query_states)
+            query_mt_preds = self.query_mt_lin(states_for_qstep)
+        else:
+            query_mt_preds = None
+        return doc_mt_preds, query_mt_preds
+
 
 
 def attn_sum_loss(batch, scores):
@@ -96,6 +150,21 @@ def attn_sum_loss(batch, scores):
     mask = batch["answers"].unsqueeze(1).expand(bsz, seqlen).eq(batch["words"].t())
     marg_log_prob_sum = (scores * Variable(mask.float())).sum(1).log().sum()
     return -marg_log_prob_sum
+
+
+xent = nn.CrossEntropyLoss(ignore_index=0)
+
+def multitask_loss1(batch, doc_mt_scores, query_mt_scores):
+    """
+    doc_mt_scores - seqlen*bsz x nclasses
+    query_mt_scores - seqlen*bsz x nclasses
+    """
+    mt1_doc_labels = batch["mt1_doc_labels"] # seqlen*bsz, w/ 0 where we want to ignore
+    loss = xent(doc_mt_scores, mt1_doc_labels)
+    if query_mt_scores is not None:
+        mt1_query_labels = batch["mt1_query_labels"] # seqlen*bsz, w/ 0 where we want to ignore
+        loss = loss + xent(query_mt_scores, mt1_query_labels)
+    return loss
 
 
 h5dat = h5py.File(args.datafile)
