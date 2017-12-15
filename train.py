@@ -38,7 +38,7 @@ class Reader(nn.Module):
             self.extr_mul = nn.Parameter(
                 torch.Tensor(1, 1, opt.extra_size).uniform_(-opt.initrange, opt.initrange))
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
-        self.softmax = nn.Softmax()
+        self.softmax = nn.Softmax(dim=1)
         self.initrange = opt.initrange
         self.mt_loss = opt.mt_loss
         self.topdrop = opt.topdrop

@@ -22,7 +22,7 @@ def reduce_vocab(word_vecs):
 class DataStuff(object):
 
     def __init__(self, args):
-        h5dat = h5py.File(args.datafile)
+        h5dat = h5py.File(args.datafile, 'r')
         # h5 keys are:
         # ner_vocab_size, post_vocab_size, punctuations, sent_vocab_size, spee_vocab_size,
         # stopwords, test_data, test_extr, test_location, test_ner, test_post, test_sentence,
@@ -68,19 +68,19 @@ class DataStuff(object):
         self.dat = dat
 
         # we need to increment feature indexes so we don't overlap
-        pos_voc_size = h5dat['post_vocab_size'][:][0]
-        self.dat["train_ner"].add_(pos_voc_size+1)
-        self.dat["valid_ner"].add_(pos_voc_size+1)
-        ner_voc_size = h5dat['ner_vocab_size'][:][0]
-        self.dat["train_sentence"].add_(pos_voc_size+ner_voc_size+1)
-        self.dat["valid_sentence"].add_(pos_voc_size+ner_voc_size+1)
-        sent_voc_size = h5dat['sent_vocab_size'][:][0]
-        self.feat_voc_size = pos_voc_size + ner_voc_size + sent_voc_size
+        pos_voc_size = h5dat['post_vocab_size'][:][0]+1
+        self.dat["train_ner"].add_(pos_voc_size)
+        self.dat["valid_ner"].add_(pos_voc_size)
+        ner_voc_size = h5dat['ner_vocab_size'][:][0]+1
+        self.dat["train_sentence"].add_(pos_voc_size+ner_voc_size)
+        self.dat["valid_sentence"].add_(pos_voc_size+ner_voc_size)
+        #sent_voc_size = h5dat['sent_vocab_size'][:][0]+1
+        self.feat_voc_size = max(self.dat["train_sentence"].max(), self.dat["valid_sentence"].max())+1
 
-        spee_voc_size = h5dat['spee_vocab_size'][:][0]
-        self.dat["train_sid"].add_(spee_voc_size+1)
-        self.dat["valid_sid"].add_(spee_voc_size+1)
-        self.spee_feat_foc_size = max(self.dat["train_sid"].max(), self.dat["valid_sid"].max())
+        spee_voc_size = h5dat['spee_vocab_size'][:][0]+1
+        self.dat["train_sid"].add_(spee_voc_size)
+        self.dat["valid_sid"].add_(spee_voc_size)
+        self.spee_feat_foc_size = max(self.dat["train_sid"].max(), self.dat["valid_sid"].max())+1
 
         self.extra_size = dat["train_extr"].size(1)
 
