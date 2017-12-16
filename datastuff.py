@@ -20,16 +20,17 @@ def reduce_vocab(word_vecs):
     return new2old, old2new
 
 
-def make_mt1_targ_idxs(batch, max_entities, max_mentions):
+def make_mt1_targ_idxs(batch, max_entities, max_mentions, per_idx):
     words = batch["words"]
     ner = batch["feats"][:, :, 1]
-    bsz, seqlen = words.size()
-    targ_idxs = torch.zeros(seqlen, bsz)
+    seqlen, bsz = words.size()
+    targ_idxs = torch.LongTensor(seqlen, bsz).zero_()
+
     for b in xrange(bsz):
         ments = 0
         uniq_ents = {}
         for i in xrange(seqlen):
-            if ments <= max_mentions and ner[i][b] == 2: # tagged PERSON
+            if ments <= max_mentions and ner[i][b] == per_idx: # tagged PERSON
                 if words[i][b] in uniq_ents:
                     targ_idxs[i][b] = uniq_ents[words[i][b]]
                     ments += 1
@@ -89,6 +90,7 @@ class DataStuff(object):
         pos_voc_size = h5dat['post_vocab_size'][:][0]+1
         self.dat["train_ner"].add_(pos_voc_size)
         self.dat["valid_ner"].add_(pos_voc_size)
+        self.per_idx = 2 + pos_voc_size # 2 is PERSON
         ner_voc_size = h5dat['ner_vocab_size'][:][0]+1
         self.dat["train_sentence"].add_(pos_voc_size+ner_voc_size)
         self.dat["valid_sentence"].add_(pos_voc_size+ner_voc_size)
@@ -177,7 +179,7 @@ class DataStuff(object):
 
         if self.mt_loss == "idx-loss":
             if batch_idx not in self.cache:
-                targs = make_mt1_targ_idxs(batch, args.max_entities, args.max_mentions)
+                targs = make_mt1_targ_idxs(batch, args.max_entities, args.max_mentions, self.per_idx)
                 self.cache[batch_idx] = targs
             batch["mt1_targs"] = self.cache[batch_idx]
 

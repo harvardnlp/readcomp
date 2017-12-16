@@ -43,9 +43,9 @@ class Reader(nn.Module):
         self.mt_loss, self.mt_step_mode, self.query_mt = opt.mt_loss, opt.mt_step_mode, opt.query_mt
         if self.mt_loss == "idx-loss":
             mt_in = opt.rnn_size if self.mt_step_mode == "before" else 2*opt.rnn_size
-            self.doc_mt_lin = nn.Linear(mt_in, opt.max_entities)
+            self.doc_mt_lin = nn.Linear(mt_in, opt.max_entities+1) # 0 is an ignore idx
             if self.query_mt:
-                self.query_mt_lin = nn.Linear(mt_in, opt.max_entities)
+                self.query_mt_lin = nn.Linear(mt_in, opt.max_entities+1)
 
         self.topdrop = opt.topdrop
         self.init_weights(word_embs, words_new2old)
