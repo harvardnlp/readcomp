@@ -38,7 +38,7 @@ class Reader(nn.Module):
             self.extr_mul = nn.Parameter(
                 torch.Tensor(1, 1, opt.extra_size).uniform_(-opt.initrange, opt.initrange))
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
-        self.softmax = nn.Softmax()
+        self.softmax = nn.Softmax(dim=1)
         self.initrange = opt.initrange
         self.mt_loss = opt.mt_loss
         self.topdrop = opt.topdrop
@@ -76,8 +76,7 @@ class Reader(nn.Module):
 
         # do the word embeddings
         for i in xrange(len(words_new2old)):
-            # words_new2old maps to 1-indexed idxs so need to subtract 1
-            old_idx = words_new2old[i]-1
+            old_idx = words_new2old[i]
             if old_idx < word_embs.size(0):
                 self.wlut.weight.data[i][:word_embs.size(1)].copy_(word_embs[old_idx])
 
@@ -122,7 +121,7 @@ class Reader(nn.Module):
         states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*2*rnn_size
         doc_states = states[:, :, self.rnn_size:3*self.rnn_size]
         #doc_states = torch.cat([states[:, :, self.rnn_size], states[:, :, -self.rnn_size:]], 2)
-        query_rep = torch.cat([states[seqlen-1, :, self.rnn_size],
+        query_rep = torch.cat([states[seqlen-1, :, :self.rnn_size],
                                states[0, :, -self.rnn_size:]], 1) # bsz x 2*rnn_size
         #query_states, _ = self.query_rnn(inp) # seqlen x bsz x 2*rnn_size
         #assert query_states.size(0) == seqlen
@@ -131,7 +130,8 @@ class Reader(nn.Module):
         #                       query_states[0, :, self.rnn_size:]], 1) # bsz x 2*rnn_size
 
         if self.topdrop and self.drop.p > 0:
-            query_rep = self.drop(query_rep)
+            doc_states = self.drop(doc_states)
+            #query_rep = self.drop(query_rep)
 
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
         scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
