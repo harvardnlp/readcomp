@@ -125,7 +125,8 @@ class Reader(nn.Module):
                                query_states[0, :, self.rnn_size:]], 1) # bsz x 2*rnn_size
 
         if self.topdrop and self.drop.p > 0:
-            query_rep = self.drop(query_rep)
+            doc_states = self.drop(doc_states)
+            #query_rep = self.drop(query_rep)
 
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
         scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
