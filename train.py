@@ -224,11 +224,10 @@ def multitask_loss1(batch, doc_mt_scores, query_mt_scores):
     doc_mt_scores - seqlen*bsz x nclasses
     query_mt_scores - seqlen*bsz x nclasses
     """
-    mt1_doc_labels = batch["mt1_doc_labels"] # seqlen*bsz, w/ 0 where we want to ignore
-    loss = xent(doc_mt_scores, mt1_doc_labels)
+    mt1_targs = batch["mt1_targs"] # seqlen x bsz, w/ 0 where we want to ignore
+    loss = xent(doc_mt_scores, mt1_targs.view(-1))
     if query_mt_scores is not None:
-        mt1_query_labels = batch["mt1_query_labels"] # seqlen*bsz, w/ 0 where we want to ignore
-        loss = loss + xent(query_mt_scores, mt1_query_labels)
+        loss = loss + xent(query_mt_scores, mt1_targs.view(-1))
     return loss
 
 

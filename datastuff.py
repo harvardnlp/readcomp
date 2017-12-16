@@ -19,6 +19,26 @@ def reduce_vocab(word_vecs):
     old2new = dict((w, i) for i, w in enumerate(new2old))
     return new2old, old2new
 
+
+def make_mt1_targ_idxs(batch, max_entities, max_mentions):
+    words = batch["words"]
+    ner = batch["feats"][:, :, 1]
+    bsz, seqlen = words.size()
+    targ_idxs = torch.zeros(seqlen, bsz)
+    for b in xrange(bsz):
+        ments = 0
+        uniq_ents = {}
+        for i in xrange(seqlen):
+            if ments <= max_mentions and ner[i][b] == 2: # tagged PERSON
+                if words[i][b] in uniq_ents:
+                    targ_idxs[i][b] = uniq_ents[words[i][b]]
+                    ments += 1
+                elif len(uniq_ents) < max_entities:
+                    uniq_ents[words[i][b]] = len(uniq_ents)+1 # b/c 0 is ignored
+                    targ_idxs[i][b] = uniq_ents[words[i][b]]
+                    ments += 1
+    return targ_idxs
+
 class DataStuff(object):
 
     def __init__(self, args):
@@ -35,8 +55,6 @@ class DataStuff(object):
             if key.startswith("train") or key.startswith("valid"):
                 dat[key] = torch.from_numpy(h5dat[key][:])
 
-        # N.B. new2old maps to things in 1-idxd land, so if using corresponding embeddings
-        # need to subtract
         words_new2old, words_old2new = reduce_vocab([dat["train_data"], dat["valid_data"]])
         print "new vocab size:", len(words_new2old)
         self.words_new2old, self.words_old2new = words_new2old, words_old2new
@@ -83,6 +101,9 @@ class DataStuff(object):
         self.spee_feat_foc_size = max(self.dat["train_sid"].max(), self.dat["valid_sid"].max())
 
         self.extra_size = dat["train_extr"].size(1)
+        self.mt_loss = args.mt_loss
+        if self.mt_loss == "idx-loss":
+            self.cache = {}
 
         self.word_ctx = torch.LongTensor()
         self.answers = torch.LongTensor()
@@ -153,6 +174,13 @@ class DataStuff(object):
             batch["spee_feats"] = self.spee_feats
         if args.use_choices:
             batch["choices"] = self.choices
+
+        if self.mt_loss == "idx-loss":
+            if batch_idx not in self.cache:
+                targs = make_mt1_targ_idxs(batch, args.max_entities, args.max_mentions)
+                self.cache[batch_idx] = targs
+            batch["mt1_targs"] = self.cache[batch_idx]
+
         return batch
 
     def del_word_embs(self):
