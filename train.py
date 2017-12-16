@@ -40,7 +40,13 @@ class Reader(nn.Module):
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
         self.softmax = nn.Softmax(dim=1)
         self.initrange = opt.initrange
-        self.mt_loss = opt.mt_loss
+        self.mt_loss, self.mt_step_mode, self.query_mt = opt.mt_loss, opt.mt_step_mode, opt.query_mt
+        if self.mt_loss == "idx-loss":
+            mt_in = opt.rnn_size if self.mt_step_mode == "before" else 2*opt.rnn_size
+            self.doc_mt_lin = nn.Linear(mt_in, opt.max_entities)
+            if self.query_mt:
+                self.query_mt_lin = nn.Linear(mt_in, opt.max_entities)
+
         self.topdrop = opt.topdrop
         self.init_weights(word_embs, words_new2old)
 
@@ -88,7 +94,8 @@ class Reader(nn.Module):
         wembs = self.wlut(batch["words"]) # seqlen x bsz -> seqlen x bsz x emb_size
         if self.std_feats:
             # seqlen x bsz x 3 -> seqlen x bsz*3 x emb_size -> seqlen x bsz x 3 x emb_size
-            fembs = self.flut(batch["feats"].view(seqlen, -1)).view(seqlen, bsz, -1, self.flut.embedding_dim)
+            fembs = self.flut(batch["feats"].view(seqlen, -1)).view(
+                seqlen, bsz, -1, self.flut.embedding_dim)
         if self.speaker_feats:
             # seqlen x bsz x 2 -> seqlen x bsz*2 x emb_size -> seqlen x bsz x 2 x emb_size
             sembs = self.splut(batch["spee_feats"].view(seqlen, -1)).view(
@@ -247,6 +254,11 @@ parser.add_argument('-query_mt', action='store_true', help='multitask on query s
 parser.add_argument('-mt_step_mode', type=str, default='before-after',
                     choices=["exact", "before-after", "before"],
                     help='which rnn states to use when doing mt stuff')
+parser.add_argument('-max_entities', type=int, default=2,
+                    help='number of distinct entities to predict')
+parser.add_argument('-max_mentions', type=int, default=2,
+                    help='number of entity tokens to predict')
+parser.add_argument('-mt_coeff', type=float, default=1, help='scales mt loss')
 
 parser.add_argument('-emb_size', type=int, default=128, help='size of word embeddings')
 parser.add_argument('-rnn_size', type=int, default=128, help='size of rnn hidden state')
@@ -329,11 +341,11 @@ if __name__ == "__main__":
             if args.mt_loss == "idx-loss":
                 mt_lossvar = multitask_loss1(batch, doc_mt_scores, q_mt_scores)
                 mt_loss += mt_lossvar.data[0]
-                lossvar = lossvar + mt_lossvar
+                lossvar = lossvar + args.mt_coeff*mt_lossvar
             elif args.mt_loss == "antecedent-loss":
                 mt_lossvar = multitask_loss2(batch, doc_mt_scores, q_mt_scores)
                 mt_loss += mt_lossvar.data[0]
-                lossvar = lossvar + mt_lossvar
+                lossvar = lossvar + args.mt_coeff*mt_lossvar
             lossvar /= bsz
             lossvar.backward()
             torch.nn.utils.clip_grad_norm(net.parameters(), args.clip)
