@@ -76,8 +76,7 @@ class Reader(nn.Module):
 
         # do the word embeddings
         for i in xrange(len(words_new2old)):
-            # words_new2old maps to 1-indexed idxs so need to subtract 1
-            old_idx = words_new2old[i]-1
+            old_idx = words_new2old[i]
             if old_idx < word_embs.size(0):
                 self.wlut.weight.data[i][:word_embs.size(1)].copy_(word_embs[old_idx])
 
