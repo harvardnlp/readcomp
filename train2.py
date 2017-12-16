@@ -30,7 +30,6 @@ class Reader(nn.Module):
         if opt.speaker_feats and not opt.add_inp:
             insize += 2*opt.sp_size
         self.doc_rnn = nn.GRU(insize, 2*opt.rnn_size, opt.layers, bidirectional=True)
-        #self.query_rnn = nn.GRU(insize, opt.rnn_size, opt.layers, bidirectional=True)
         self.drop = nn.Dropout(opt.dropout)
         if opt.add_inp:
             self.extr_lin = nn.Linear(opt.extra_size, opt.emb_size)
@@ -40,7 +39,10 @@ class Reader(nn.Module):
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
         self.softmax = nn.Softmax(dim=1)
         self.initrange = opt.initrange
-        self.mt_loss = opt.mt_loss
+        self.mt_loss, self.mt_step_mode, self.query_mt = opt.mt_loss, opt.mt_step_mode, opt.query_mt
+        if self.mt_loss == "idx-loss":
+            mt_in = 2*opt.rnn_size if self.mt_step_mode == "before" else 4*opt.rnn_size
+            self.doc_mt_lin = nn.Linear(mt_in, opt.max_entities+1) # 0 is an ignore idx
         self.topdrop = opt.topdrop
         self.init_weights(word_embs, words_new2old)
 
@@ -58,7 +60,7 @@ class Reader(nn.Module):
         for lut in luts:
             lut.weight.data.uniform_(-initrange, initrange)
 
-        rnns = [self.doc_rnn] #, self.query_rnn]
+        rnns = [self.doc_rnn]
         for rnn in rnns:
             for thing in rnn.parameters():
                 thing.data.uniform_(-initrange, initrange)
@@ -68,8 +70,6 @@ class Reader(nn.Module):
             lins.append(self.extr_lin)
         if self.mt_loss == "idx-loss":
             lins.append(self.doc_mt_lin)
-            if self.query_mt:
-                lins.append(self.query_mt_lin)
         for lin in lins:
             lin.weight.data.uniform_(-initrange, initrange)
             lin.bias.data.zero_()
@@ -120,14 +120,8 @@ class Reader(nn.Module):
         # view each state as [fwd_q, fwd_d, bwd_d, bwd_q]
         states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*2*rnn_size
         doc_states = states[:, :, self.rnn_size:3*self.rnn_size]
-        #doc_states = torch.cat([states[:, :, self.rnn_size], states[:, :, -self.rnn_size:]], 2)
         query_rep = torch.cat([states[seqlen-1, :, :self.rnn_size],
                                states[0, :, -self.rnn_size:]], 1) # bsz x 2*rnn_size
-        #query_states, _ = self.query_rnn(inp) # seqlen x bsz x 2*rnn_size
-        #assert query_states.size(0) == seqlen
-        # take last forward state and first bwd state
-        #query_rep = torch.cat([query_states[seqlen-1, :, :self.rnn_size],
-        #                       query_states[0, :, self.rnn_size:]], 1) # bsz x 2*rnn_size
 
         if self.topdrop and self.drop.p > 0:
             doc_states = self.drop(doc_states)
@@ -148,7 +142,7 @@ class Reader(nn.Module):
         """
         gets the states we want for doing multiclass pred @ time t
         args:
-          states - seqlen x bsz x 2*rnn_size
+          states - seqlen x bsz x 2*2*rnn_size; view each state as [fwd_q, fwd_d, bwd_d, bwd_q]
         returns:
           seqlen*bsz x something
         """
@@ -159,17 +153,17 @@ class Reader(nn.Module):
         dummy = self.dummy
 
         if self.mt_step_mode == "exact":
-            nustates = states.view(-1, drnn_sz) # seqlen*bsz x 2*rnn_size
+            nustates = states.view(-1, drnn_sz) # seqlen*bsz x 2*2*rnn_size
         elif self.mt_step_mode == "before-after":
             dummyvar = Variable(dummy.expand(bsz, drnn_sz/2))
-            # prepend zeros to front, giving seqlen*bsz x rnn_size
+            # prepend zeros to front, giving seqlen*bsz x 2*rnn_size
             fwds = torch.cat([dummyvar, states.view(-1, drnn_sz)[:-bsz, :drnn_sz/2]], 0)
-            # append zeros to back, giving seqlen*bsz x rnn_size
+            # append zeros to back, giving seqlen*bsz x 2*rnn_size
             bwds = torch.cat([states.view(-1, drnn_sz)[bsz:, drnn_sz/2:], dummyvar], 0)
-            nustates = torch.cat([fwds, bwds], 1) # seqlen*bsz x 2*rnn_size
+            nustates = torch.cat([fwds, bwds], 1) # seqlen*bsz x 2*2*rnn_size
         elif self.mt_step_mode == "before": # just before
             dummyvar = Variable(dummy.expand(bsz, drnn_sz/2))
-            # prepend zeros to front, giving seqlen*bsz x rnn_size
+            # prepend zeros to front, giving seqlen*bsz x 2*rnn_size
             nustates = torch.cat([dummyvar, states.view(-1, drnn_sz)[:-bsz, :drnn_sz/2]], 0)
         else:
             assert False, "%s not a thing" % self.mt_step_mode
@@ -249,10 +243,14 @@ parser.add_argument('-speaker_feats', action='store_true', help='')
 parser.add_argument('-use_choices', action='store_true', help='')
 parser.add_argument('-mt_loss', type=str, default='',
                     choices=["", "idx-loss", "antecedent-loss"], help='')
-parser.add_argument('-query_mt', action='store_true', help='multitask on query states too')
 parser.add_argument('-mt_step_mode', type=str, default='before-after',
                     choices=["exact", "before-after", "before"],
                     help='which rnn states to use when doing mt stuff')
+parser.add_argument('-max_entities', type=int, default=2,
+                    help='number of distinct entities to predict')
+parser.add_argument('-max_mentions', type=int, default=2,
+                    help='number of entity tokens to predict')
+parser.add_argument('-mt_coeff', type=float, default=1, help='scales mt loss')
 
 parser.add_argument('-emb_size', type=int, default=128, help='size of word embeddings')
 parser.add_argument('-rnn_size', type=int, default=128, help='size of rnn hidden state')
@@ -335,11 +333,11 @@ if __name__ == "__main__":
             if args.mt_loss == "idx-loss":
                 mt_lossvar = multitask_loss1(batch, doc_mt_scores, q_mt_scores)
                 mt_loss += mt_lossvar.data[0]
-                lossvar = lossvar + mt_lossvar
+                lossvar = lossvar + args.mt_coeff*mt_lossvar
             elif args.mt_loss == "antecedent-loss":
                 mt_lossvar = multitask_loss2(batch, doc_mt_scores, q_mt_scores)
                 mt_loss += mt_lossvar.data[0]
-                lossvar = lossvar + mt_lossvar
+                lossvar = lossvar + args.mt_coeff*mt_lossvar
             lossvar /= bsz
             lossvar.backward()
             torch.nn.utils.clip_grad_norm(net.parameters(), args.clip)
