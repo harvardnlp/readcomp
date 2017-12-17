@@ -39,11 +39,11 @@ class Reader(nn.Module):
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
         self.softmax = nn.Softmax(dim=1)
         self.initrange = opt.initrange
-        self.mt_loss, self.mt_step_mode, self.query_mt = opt.mt_loss, opt.mt_step_mode, opt.query_mt
+        self.mt_loss, self.mt_step_mode = opt.mt_loss, opt.mt_step_mode
         if self.mt_loss == "idx-loss":
             mt_in = 2*opt.rnn_size if self.mt_step_mode == "before" else 4*opt.rnn_size
             self.doc_mt_lin = nn.Linear(mt_in, opt.max_entities+1) # 0 is an ignore idx
-        self.topdrop = opt.topdrop
+        self.topdrop, self.mt_drop = opt.topdrop, opt.mt_drop
         self.init_weights(word_embs, words_new2old)
 
 
@@ -130,13 +130,13 @@ class Reader(nn.Module):
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
         scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
         # TODO: punctuation shit
-        doc_mt_scores, query_mt_scores = None, None
+        doc_mt_scores = None
         if self.mt_loss == "idx-loss":
-            doc_mt_scores, query_mt_scores = self.get_step_scores(doc_states, query_states)
+            doc_mt_scores = self.get_step_scores(states)
         elif self.mt_loss == "antecedent-loss":
-            doc_mt_scores, query_mt_scores = self.get_ant_scores(doc_states, query_states)
+            doc_mt_scores = self.get_ant_scores(states)
 
-        return self.softmax(scores), doc_mt_scores, query_mt_scores
+        return self.softmax(scores), doc_mt_scores
 
     def get_states_for_step(self, states):
         """
@@ -170,19 +170,15 @@ class Reader(nn.Module):
         return nustates
 
 
-    def get_step_scores(self, doc_states, query_states):
+    def get_step_scores(self, states):
         """
         doc_states - seqlen x bsz x 2*rnn_size
-        query_states - seqlen x bsz x 2*rnn_size
         """
-        states_for_step = self.get_states_for_step(doc_states)
+        states_for_step = self.get_states_for_step(states)
+        if self.mt_drop and self.drop.p > 0:
+            states_for_step = self.drop(states_for_step)
         doc_mt_preds = self.doc_mt_lin(states_for_step) # seqlen*bsz x nclasses
-        if self.query_mt:
-            states_for_qstep = self.get_states_for_step(query_states)
-            query_mt_preds = self.query_mt_lin(states_for_qstep)
-        else:
-            query_mt_preds = None
-        return doc_mt_preds, query_mt_preds
+        return doc_mt_preds
 
 
 def get_ncorrect(batch, scores):
@@ -219,15 +215,12 @@ def attn_sum_loss(batch, scores):
 
 xent = nn.CrossEntropyLoss(ignore_index=0, size_average=False)
 
-def multitask_loss1(batch, doc_mt_scores, query_mt_scores):
+def multitask_loss1(batch, doc_mt_scores):
     """
     doc_mt_scores - seqlen*bsz x nclasses
-    query_mt_scores - seqlen*bsz x nclasses
     """
     mt1_targs = batch["mt1_targs"] # seqlen x bsz, w/ 0 where we want to ignore
     loss = xent(doc_mt_scores, mt1_targs.view(-1))
-    if query_mt_scores is not None:
-        loss = loss + xent(query_mt_scores, mt1_targs.view(-1))
     return loss
 
 
@@ -260,6 +253,7 @@ parser.add_argument('-layers', type=int, default=1, help='num rnn layers')
 parser.add_argument('-add_inp', action='store_true', help='mlp features (instead of concat)')
 parser.add_argument('-dropout', type=float, default=0, help='dropout')
 parser.add_argument('-topdrop', action='store_true', help='dropout on last rnn layer')
+parser.add_argument('-mt_drop', action='store_true', help='dropout before mt decoder')
 parser.add_argument('-relu', action='store_true', help='relu for input mlp')
 
 parser.add_argument('-optim', type=str, default='adam', help='')
@@ -327,15 +321,15 @@ if __name__ == "__main__":
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k])
-            word_scores, doc_mt_scores, q_mt_scores = net(batch)
+            word_scores, doc_mt_scores = net(batch)
             lossvar = attn_sum_loss(batch, word_scores)
             pred_loss += lossvar.data[0]
             if args.mt_loss == "idx-loss":
-                mt_lossvar = multitask_loss1(batch, doc_mt_scores, q_mt_scores)
+                mt_lossvar = multitask_loss1(batch, doc_mt_scores)
                 mt_loss += mt_lossvar.data[0]
                 lossvar = lossvar + args.mt_coeff*mt_lossvar
             elif args.mt_loss == "antecedent-loss":
-                mt_lossvar = multitask_loss2(batch, doc_mt_scores, q_mt_scores)
+                mt_lossvar = multitask_loss2(batch, doc_mt_scores)
                 mt_loss += mt_lossvar.data[0]
                 lossvar = lossvar + args.mt_coeff*mt_lossvar
             lossvar /= bsz
@@ -358,7 +352,7 @@ if __name__ == "__main__":
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
-            word_scores, _, _ = net(batch)
+            word_scores, _ = net(batch)
             ncorrect += get_ncorrect(batch, word_scores)
             total += bsz
         acc = float(ncorrect)/total

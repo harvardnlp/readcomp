@@ -47,7 +47,7 @@ class Reader(nn.Module):
             if self.query_mt:
                 self.query_mt_lin = nn.Linear(mt_in, opt.max_entities+1)
 
-        self.topdrop = opt.topdrop
+        self.topdrop, self.mt_drop = opt.topdrop, opt.mt_drop
         self.init_weights(word_embs, words_new2old)
 
 
@@ -183,9 +183,13 @@ class Reader(nn.Module):
         query_states - seqlen x bsz x 2*rnn_size
         """
         states_for_step = self.get_states_for_step(doc_states)
+        if self.mt_drop and self.drop.p > 0:
+            states_for_step = self.drop(states_for_step)
         doc_mt_preds = self.doc_mt_lin(states_for_step) # seqlen*bsz x nclasses
         if self.query_mt:
             states_for_qstep = self.get_states_for_step(query_states)
+            if self.mt_drop and self.drop.p > 0:
+                states_for_qstep = self.drop(states_for_qstep)
             query_mt_preds = self.query_mt_lin(states_for_qstep)
         else:
             query_mt_preds = None
@@ -268,6 +272,7 @@ parser.add_argument('-layers', type=int, default=1, help='num rnn layers')
 parser.add_argument('-add_inp', action='store_true', help='mlp features (instead of concat)')
 parser.add_argument('-dropout', type=float, default=0, help='dropout')
 parser.add_argument('-topdrop', action='store_true', help='dropout on last rnn layer')
+parser.add_argument('-mt_drop', action='store_true', help='dropout before mt decoder')
 parser.add_argument('-relu', action='store_true', help='relu for input mlp')
 
 parser.add_argument('-optim', type=str, default='adam', help='')
