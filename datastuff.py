@@ -40,6 +40,26 @@ def make_mt1_targ_idxs(batch, max_entities, max_mentions, per_idx):
                     ments += 1
     return targ_idxs
 
+
+def make_mt2_targs(batch, max_entities, max_mentions, per_idx):
+    words = batch["words"]
+    ner = batch["feats"][:, :, 1]
+    seqlen, bsz = words.size()
+    rep_ents = torch.zeros(bsz, seqlen) # entities that have been repeated
+
+    for b in xrange(bsz):
+        ments = 0
+        uniq_ents = set()
+        for i in xrange(seqlen):
+            if ments <= max_mentions and ner[i][b] == per_idx: # tagged PERSON
+                if words[i][b] in uniq_ents:
+                    rep_ents[b][i] = 1
+                    ments += 1
+                elif len(uniq_ents) < max_entities:
+                    uniq_ents.add(words[i][b]) # it's first so don't add it
+
+    return rep_ents
+
 class DataStuff(object):
 
     def __init__(self, args):
@@ -95,7 +115,8 @@ class DataStuff(object):
         self.dat["train_sentence"].add_(pos_voc_size+ner_voc_size)
         self.dat["valid_sentence"].add_(pos_voc_size+ner_voc_size)
         #sent_voc_size = h5dat['sent_vocab_size'][:][0]+1
-        self.feat_voc_size = max(self.dat["train_sentence"].max(), self.dat["valid_sentence"].max())+1
+        self.feat_voc_size = max(self.dat["train_sentence"].max(),
+                                 self.dat["valid_sentence"].max())+1
 
         spee_voc_size = h5dat['spee_vocab_size'][:][0]+1
         self.dat["train_sid"].add_(spee_voc_size)
@@ -104,7 +125,7 @@ class DataStuff(object):
 
         self.extra_size = dat["train_extr"].size(1)
         self.mt_loss = args.mt_loss
-        if self.mt_loss == "idx-loss":
+        if self.mt_loss != "":
             self.cache = {}
 
         self.word_ctx = torch.LongTensor()
@@ -179,9 +200,16 @@ class DataStuff(object):
 
         if self.mt_loss == "idx-loss":
             if batch_idx not in self.cache:
-                targs = make_mt1_targ_idxs(batch, args.max_entities, args.max_mentions, self.per_idx)
+                targs = make_mt1_targ_idxs(batch, args.max_entities,
+                                           args.max_mentions, self.per_idx)
                 self.cache[batch_idx] = targs
             batch["mt1_targs"] = self.cache[batch_idx]
+        elif self.mt_loss == "ant-loss":
+            if batch_idx not in self.cache:
+                targs = make_mt2_targs(batch, args.max_entities,
+                                       args.max_mentions, self.per_idx)
+                self.cache[batch_idx] = targs
+            batch["mt2_targs"] = self.cache[batch_idx]
 
         return batch
 
