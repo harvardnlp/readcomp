@@ -1,0 +1,3 @@
+python preprocess-lambada.py --data ~/data/cbt/ --glove ~/data/glove/glove.6B.100d.txt --train NE_train.lq.replace --valid NE_valid.lq.replace --test NE_test.lq.replace --std_feats --ent_feats --disc_feats --speaker_feats --cbt_mode --answer_identifier xxxxx --out_file cbt.hdf5
+
+th nutrain.lua --cuda --randomseed 13 --maxepoch 7 --postsize 128 --id CE35choicemulti --datafile NE_cbt.hdf5 --nersize 128 --sentsize 80 --speesize 80 --entity 2 --entitysize 2 --std_feats --ent_feats --disc_feats --speaker_feats --use_choices --lr 0.001 --maxseqlen 1500 --dropout 0.2
