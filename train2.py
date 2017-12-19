@@ -43,6 +43,11 @@ class Reader(nn.Module):
         if self.mt_loss == "idx-loss":
             mt_in = 2*opt.rnn_size if self.mt_step_mode == "before" else 4*opt.rnn_size
             self.doc_mt_lin = nn.Linear(mt_in, opt.max_entities+1) # 0 is an ignore idx
+        elif self.mt_loss == "ant-loss":
+            self.transform_for_ants = opt.transform_for_ants
+            if opt.transform_for_ants:
+                trans_size = 2*opt.rnn_size if self.mt_step_mode == "before" else 4*opt.rnn_size
+                self.ant_lin = nn.Linear(2*opt.rnn_size, trans_size)
         self.topdrop, self.mt_drop = opt.topdrop, opt.mt_drop
         self.init_weights(word_embs, words_new2old)
 
@@ -70,6 +75,8 @@ class Reader(nn.Module):
             lins.append(self.extr_lin)
         if self.mt_loss == "idx-loss":
             lins.append(self.doc_mt_lin)
+        if self.mt_loss == "ant-loss" and self.transform_for_ants:
+            lins.append(self.ant_lin)
         for lin in lins:
             lin.weight.data.uniform_(-initrange, initrange)
             lin.bias.data.zero_()
@@ -129,11 +136,10 @@ class Reader(nn.Module):
 
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
         scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
-        # TODO: punctuation shit
         doc_mt_scores = None
         if self.mt_loss == "idx-loss":
             doc_mt_scores = self.get_step_scores(states)
-        elif self.mt_loss == "antecedent-loss":
+        elif self.mt_loss == "ant-loss":
             doc_mt_scores = self.get_ant_scores(states)
 
         return self.softmax(scores), doc_mt_scores
@@ -172,7 +178,9 @@ class Reader(nn.Module):
 
     def get_step_scores(self, states):
         """
-        doc_states - seqlen x bsz x 2*rnn_size
+        states - seqlen x bsz x 2*2*rnn_size
+        returns:
+          seqlen*bsz x nclasses
         """
         states_for_step = self.get_states_for_step(states)
         if self.mt_drop and self.drop.p > 0:
@@ -180,6 +188,22 @@ class Reader(nn.Module):
         doc_mt_preds = self.doc_mt_lin(states_for_step) # seqlen*bsz x nclasses
         return doc_mt_preds
 
+    def get_ant_scores(self, states):
+        """
+        states - seqlen x bsz x 2*2*rnn_size
+        return:
+          bsz x seqlen x seqlen
+        """
+        seqlen, bsz, drnn_sz = states.size()
+        states_for_step = self.get_states_for_step(states).view(seqlen, bsz, -1)
+        fwd_states = states[:, :, :drnn_sz/2] # seqlen x bsz x 2*rnn_size
+        # may need to transform first....
+        # bsz x seqlen x sz * bsz x sz x seqlen -> bsz x seqlen x seqlen
+        if self.transform_for_ants:
+            fwd_states = self.ant_lin(fwd_states.view(-1, drnn_sz/2)).view(seqlen, bsz, -1)
+        scores = torch.bmm(fwd_states.transpose(0, 1),
+                           states_for_step.transpose(0, 1).transpose(1, 2))
+        return scores
 
 def get_ncorrect(batch, scores):
     """
@@ -223,6 +247,26 @@ def multitask_loss1(batch, doc_mt_scores):
     loss = xent(doc_mt_scores, mt1_targs.view(-1))
     return loss
 
+def multitask_loss2(batch, doc_mt_scores, sm):
+    """
+    doc_mt_scores - bsz x seqlen x seqlen
+    N.B. rn this only considers entities that are repeated; should
+      really have it predict a dummy value for things not repeated
+    """
+    bsz, seqlen, _ = doc_mt_scores.size()
+    loss = 0
+    reps = batch["mt2_targs"] # bsz x seqlen; indicators for repeated entities
+    for b in xrange(bsz):
+        # get lower triangle (excluding diagonal!) then softmax
+        pws = sm(torch.tril(doc_mt_scores[b]), diagonal=-1) # seqlen x seqlen
+        words_b = batch["words"].data[:, b].unsqueeze(1).expand(seqlen, seqlen).t()
+        #mask = ents[b].data.unsqueeze(1).expand(seqlen, seqlen).eq(words_b)
+        mask = words_b.t().eq(words_b) # seqlen x seqlen
+        marg_log_probs = (pws * Variable(mask.float())).sum(1).log()
+        # we need to ignore rows not corresponding to entities
+        loss = loss - marg_log_probs.dot(reps[b])
+    return loss
+
 
 parser = argparse.ArgumentParser(description='')
 parser.add_argument('-datafile', type=str, default='', help='')
@@ -235,7 +279,7 @@ parser.add_argument('-std_feats', action='store_true', help='')
 parser.add_argument('-speaker_feats', action='store_true', help='')
 parser.add_argument('-use_choices', action='store_true', help='')
 parser.add_argument('-mt_loss', type=str, default='',
-                    choices=["", "idx-loss", "antecedent-loss"], help='')
+                    choices=["", "idx-loss", "ant-loss"], help='')
 parser.add_argument('-mt_step_mode', type=str, default='before-after',
                     choices=["exact", "before-after", "before"],
                     help='which rnn states to use when doing mt stuff')
@@ -328,8 +372,8 @@ if __name__ == "__main__":
                 mt_lossvar = multitask_loss1(batch, doc_mt_scores)
                 mt_loss += mt_lossvar.data[0]
                 lossvar = lossvar + args.mt_coeff*mt_lossvar
-            elif args.mt_loss == "antecedent-loss":
-                mt_lossvar = multitask_loss2(batch, doc_mt_scores)
+            elif args.mt_loss == "ant-loss":
+                mt_lossvar = multitask_loss2(batch, doc_mt_scores, net.softmax)
                 mt_loss += mt_lossvar.data[0]
                 lossvar = lossvar + args.mt_coeff*mt_lossvar
             lossvar /= bsz
