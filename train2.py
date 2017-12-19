@@ -196,11 +196,16 @@ class Reader(nn.Module):
         """
         seqlen, bsz, drnn_sz = states.size()
         states_for_step = self.get_states_for_step(states).view(seqlen, bsz, -1)
-        fwd_states = states[:, :, :drnn_sz/2] # seqlen x bsz x 2*rnn_size
+        
         # may need to transform first....
         # bsz x seqlen x sz * bsz x sz x seqlen -> bsz x seqlen x seqlen
         if self.transform_for_ants:
-            fwd_states = self.ant_lin(fwd_states.view(-1, drnn_sz/2)).view(seqlen, bsz, -1)
+            fwd_states = states.view(-1, states.size(2))[:, :drnn_sz/2] # seqlen*bsz x 2*rnn_size
+            fwd_states = self.ant_lin(fwd_states)
+            fwd_states = fwd_states.view(seqlen, bsz, -1)
+        else:
+            fwd_states = states[:, :, :drnn_sz/2] # seqlen x bsz x 2*rnn_size
+
         scores = torch.bmm(fwd_states.transpose(0, 1),
                            states_for_step.transpose(0, 1).transpose(1, 2))
         return scores
@@ -258,11 +263,11 @@ def multitask_loss2(batch, doc_mt_scores, sm):
     reps = batch["mt2_targs"] # bsz x seqlen; indicators for repeated entities
     for b in xrange(bsz):
         # get lower triangle (excluding diagonal!) then softmax
-        pws = sm(torch.tril(doc_mt_scores[b]), diagonal=-1) # seqlen x seqlen
+        pws = sm(torch.tril(doc_mt_scores[b], diagonal=-1)) # seqlen x seqlen
         words_b = batch["words"].data[:, b].unsqueeze(1).expand(seqlen, seqlen).t()
         #mask = ents[b].data.unsqueeze(1).expand(seqlen, seqlen).eq(words_b)
         mask = words_b.t().eq(words_b) # seqlen x seqlen
-        marg_log_probs = (pws * Variable(mask.float())).sum(1).log()
+        marg_log_probs = (pws * Variable(mask.float())).sum(1).add_(1e-6).log()
         # we need to ignore rows not corresponding to entities
         loss = loss - marg_log_probs.dot(reps[b])
     return loss
@@ -287,6 +292,7 @@ parser.add_argument('-max_entities', type=int, default=2,
                     help='number of distinct entities to predict')
 parser.add_argument('-max_mentions', type=int, default=2,
                     help='number of entity tokens to predict')
+parser.add_argument('-transform_for_ants', action='store_true', help='')
 parser.add_argument('-mt_coeff', type=float, default=1, help='scales mt loss')
 
 parser.add_argument('-emb_size', type=int, default=128, help='size of word embeddings')
