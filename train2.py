@@ -47,7 +47,7 @@ class Reader(nn.Module):
             self.transform_for_ants = opt.transform_for_ants
             if opt.transform_for_ants:
                 trans_size = 2*opt.rnn_size if self.mt_step_mode == "before" else 4*opt.rnn_size
-                self.ant_lin = nn.Linear(2*opt.rnn_size, trans_size)
+                self.ant_lin = nn.Linear(2*opt.rnn_size, trans_size, bias=False)
         self.topdrop, self.mt_drop = opt.topdrop, opt.mt_drop
         self.init_weights(word_embs, words_new2old)
 
@@ -79,7 +79,8 @@ class Reader(nn.Module):
             lins.append(self.ant_lin)
         for lin in lins:
             lin.weight.data.uniform_(-initrange, initrange)
-            lin.bias.data.zero_()
+            if lin.bias is not None:
+                lin.bias.data.zero_()
 
         # do the word embeddings
         for i in xrange(len(words_new2old)):
@@ -196,18 +197,19 @@ class Reader(nn.Module):
         """
         seqlen, bsz, drnn_sz = states.size()
         states_for_step = self.get_states_for_step(states).view(seqlen, bsz, -1)
-        
+
         # may need to transform first....
         # bsz x seqlen x sz * bsz x sz x seqlen -> bsz x seqlen x seqlen
         if self.transform_for_ants:
-            fwd_states = states.view(-1, states.size(2))[:, :drnn_sz/2] # seqlen*bsz x 2*rnn_size
-            fwd_states = self.ant_lin(fwd_states)
-            fwd_states = fwd_states.view(seqlen, bsz, -1)
+            ant_states = states.view(-1, states.size(2))[:, :drnn_sz/2] # seqlen*bsz x 2*rnn_size
+            ant_states = self.ant_lin(ant_states).view(seqlen, bsz, -1)
         else:
-            fwd_states = states[:, :, :drnn_sz/2] # seqlen x bsz x 2*rnn_size
+            ant_states = states[:, :, :drnn_sz/2] # seqlen x bsz x 2*rnn_size
 
-        scores = torch.bmm(fwd_states.transpose(0, 1),
-                           states_for_step.transpose(0, 1).transpose(1, 2))
+        # scores = torch.bmm(ant_states.transpose(0, 1),
+        #                    states_for_step.transpose(0, 1).transpose(1, 2))
+        scores = torch.bmm(states_for_step.transpose(0, 1),
+                           ant_states.transpose(0, 1).transpose(1, 2))
         return scores
 
 def get_ncorrect(batch, scores):
@@ -267,7 +269,8 @@ def multitask_loss2(batch, doc_mt_scores, sm):
         words_b = batch["words"].data[:, b].unsqueeze(1).expand(seqlen, seqlen).t()
         #mask = ents[b].data.unsqueeze(1).expand(seqlen, seqlen).eq(words_b)
         mask = words_b.t().eq(words_b) # seqlen x seqlen
-        marg_log_probs = (pws * Variable(mask.float())).sum(1).add_(1e-6).log()
+        marg_log_probs = (pws * Variable(torch.tril( # probably not necessary to tril...
+            mask.float(), diagonal=-1))).sum(1).add_(1e-6).log()
         # we need to ignore rows not corresponding to entities
         loss = loss - marg_log_probs.dot(reps[b])
     return loss
