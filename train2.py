@@ -302,7 +302,7 @@ parser.add_argument('-query_idx', type=int, default=56298, help='query idx in OR
 
 parser.add_argument('-mt_loss', type=str, default='',
                     choices=["", "idx-loss", "ant-loss"], help='')
-parser.add_argument('-mt_step_mode', type=str, default='before-after',
+parser.add_argument('-mt_step_mode', type=str, default='before',
                     choices=["exact", "before-after", "before"],
                     help='which rnn states to use when doing mt stuff')
 parser.add_argument('-max_entities', type=int, default=2,
@@ -325,6 +325,7 @@ parser.add_argument('-relu', action='store_true', help='relu for input mlp')
 
 parser.add_argument('-optim', type=str, default='adam', help='')
 parser.add_argument('-lr', type=float, default=0.001, help='learning rate')
+parser.add_argument('-beta1', type=float, default=0.9, help='')
 parser.add_argument('-epochs', type=int, default=4, help='')
 parser.add_argument('-clip', type=float, default=5, help='gradient clipping')
 parser.add_argument('-initrange', type=float, default=0.1, help='uniform init interval')
@@ -370,7 +371,7 @@ if __name__ == "__main__":
     if args.optim == "adagrad":
         optalg = optim.Adagrad(net.parameters(), lr=args.lr)
     else:
-        optalg = optim.Adam(net.parameters(), lr=args.lr, betas=(0.9, 0.999))
+        optalg = optim.Adam(net.parameters(), lr=args.lr, betas=(args.beta1, 0.999))
 
     batch_start_idxs = range(0, data.ntrain, args.bsz)
     val_batch_start_idxs = range(0, data.nvalid, args.bsz)
