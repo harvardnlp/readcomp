@@ -75,6 +75,8 @@ class DataStuff(object):
         for key in h5dat.keys():
             if key.startswith("train") or key.startswith("valid"):
                 dat[key] = torch.from_numpy(h5dat[key][:])
+            elif key == "test_data" or key == "test_sid": # just for vocab purposes
+                dat[key] = torch.from_numpy(h5dat[key][:])
 
         words_new2old, words_old2new = reduce_vocab([dat["train_data"], dat["valid_data"],
                                                      dat["test_data"]])

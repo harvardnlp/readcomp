@@ -49,6 +49,7 @@ class Reader(nn.Module):
                 trans_size = 2*opt.rnn_size if self.mt_step_mode == "before" else 4*opt.rnn_size
                 self.ant_lin = nn.Linear(2*opt.rnn_size, trans_size, bias=False)
         self.topdrop, self.mt_drop = opt.topdrop, opt.mt_drop
+        self.use_choices, self.use_test_choices = opt.use_choices, opt.use_test_choices
         self.init_weights(word_embs, words_new2old)
 
 
@@ -130,8 +131,9 @@ class Reader(nn.Module):
         doc_states = states[:, :, self.rnn_size:3*self.rnn_size]
 
         if args.use_qidx:
-            b4states = states.view(-1, states.size(2))[batch["qpos"]-1][:, :self.rnn_size]
-            afterstates = states.view(-1, states.size(2))[batch["qpos"]+1][:, -self.rnn_size:]
+            # get states before and after the question idx
+            b4states = states.view(-1, states.size(2))[batch["qpos"]-bsz][:, :self.rnn_size]
+            afterstates = states.view(-1, states.size(2))[batch["qpos"]+bsz][:, -self.rnn_size:]
             query_rep = torch.cat([b4states, afterstates], 1) # bsz x 2*rnn_size
         else:
             query_rep = torch.cat([states[seqlen-1, :, :self.rnn_size],
@@ -420,7 +422,7 @@ if __name__ == "__main__":
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
-            word_scores, _ = net(batch)
+            word_scores, _ = net(batch, val=True)
             ncorrect += get_ncorrect(batch, word_scores)
             total += bsz
         acc = float(ncorrect)/total
