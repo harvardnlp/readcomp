@@ -88,7 +88,7 @@ class Reader(nn.Module):
             if old_idx < word_embs.size(0):
                 self.wlut.weight.data[i][:word_embs.size(1)].copy_(word_embs[old_idx])
 
-    def forward(self, batch):
+    def forward(self, batch, val=False):
         """
         returns bsz x seqlen scores
         """
@@ -128,8 +128,14 @@ class Reader(nn.Module):
         # view each state as [fwd_q, fwd_d, bwd_d, bwd_q]
         states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*2*rnn_size
         doc_states = states[:, :, self.rnn_size:3*self.rnn_size]
-        query_rep = torch.cat([states[seqlen-1, :, :self.rnn_size],
-                               states[0, :, -self.rnn_size:]], 1) # bsz x 2*rnn_size
+
+        if args.use_qidx:
+            b4states = states.view(-1, states.size(2))[batch["qpos"]-1][:, :self.rnn_size]
+            afterstates = states.view(-1, states.size(2))[batch["qpos"]+1][:, -self.rnn_size:]
+            query_rep = torch.cat([b4states, afterstates], 1) # bsz x 2*rnn_size
+        else:
+            query_rep = torch.cat([states[seqlen-1, :, :self.rnn_size],
+                                   states[0, :, -self.rnn_size:]], 1) # bsz x 2*rnn_size
 
         if self.topdrop and self.drop.p > 0:
             doc_states = self.drop(doc_states)
@@ -137,6 +143,10 @@ class Reader(nn.Module):
 
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
         scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
+
+        if self.use_choices or (val and self.use_test_choices):
+            scores = batch["choicemask"] * scores
+
         doc_mt_scores = None
         if self.mt_loss == "idx-loss":
             doc_mt_scores = self.get_step_scores(states)
@@ -286,6 +296,10 @@ parser.add_argument('-load', type=str, default='', help='path to saved model')
 parser.add_argument('-std_feats', action='store_true', help='')
 parser.add_argument('-speaker_feats', action='store_true', help='')
 parser.add_argument('-use_choices', action='store_true', help='')
+parser.add_argument('-use_test_choices', action='store_true', help='')
+parser.add_argument('-use_qidx', action='store_true', help='')
+parser.add_argument('-query_idx', type=int, default=56298, help='query idx in ORIGINAL data')
+
 parser.add_argument('-mt_loss', type=str, default='',
                     choices=["", "idx-loss", "ant-loss"], help='')
 parser.add_argument('-mt_step_mode', type=str, default='before-after',

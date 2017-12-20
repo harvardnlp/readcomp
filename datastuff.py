@@ -76,7 +76,8 @@ class DataStuff(object):
             if key.startswith("train") or key.startswith("valid"):
                 dat[key] = torch.from_numpy(h5dat[key][:])
 
-        words_new2old, words_old2new = reduce_vocab([dat["train_data"], dat["valid_data"]])
+        words_new2old, words_old2new = reduce_vocab([dat["train_data"], dat["valid_data"],
+                                                     dat["test_data"]])
         print "new vocab size:", len(words_new2old)
         self.words_new2old, self.words_old2new = words_new2old, words_old2new
 
@@ -85,12 +86,22 @@ class DataStuff(object):
             for i in xrange(dat[key].size(0)):
                 dat[key][i] = words_old2new[dat[key][i]]
 
+        if args.use_choices or args.use_test_choices:
+            for key in ['train_choices', 'valid_choices']:
+                vec = dat[key].view(-1)
+                for i in xrange(vec.size(0)):
+                    vec[i] = words_old2new[vec[i]]
+
+        if args.use_qidx:
+            self.query_idx = self.words_old2new[args.query_idx]
+
         # hold on to word embs for a bit
         self.word_embs = torch.from_numpy(h5dat["word_embeddings"][:])
 
         # we also want to do this for speaker_ids if we have them
         if args.speaker_feats:
-            sid_new2old, sid_old2new = reduce_vocab([dat["train_sid"], dat["valid_sid"]])
+            sid_new2old, sid_old2new = reduce_vocab([dat["train_sid"], dat["valid_sid"],
+                                                     dat["test_sid"]])
             self.sid_new2old, self.sid_old2new = sid_new2old, sid_old2new
 
             # replace
@@ -134,7 +145,11 @@ class DataStuff(object):
         self.feats = torch.LongTensor()
         self.extr = torch.Tensor()
         self.spee_feats = torch.LongTensor()
-        self.choices = torch.Tensor()
+        self.use_qidx = args.use_qidx
+        if self.use_qidx:
+            self.query_pos = torch.LongTensor()
+        if args.use_choices or args.use_test_choices:
+            self.choicemask = torch.Tensor()
 
         h5dat.close()
 
@@ -159,8 +174,11 @@ class DataStuff(object):
         if args.speaker_feats:
             self.spee_feats.resize_(max_ctx_len, bsz, 2).zero_()
 
-        if args.use_choices:
-            self.choices.resize_(bsz, 10).zero_()
+        if args.use_choices or (args.use_test_choices and not train):
+            self.choicemask.resize_(bsz, max_ctx_len).zero_()
+
+        if self.use_qidx:
+            self.query_pos.resize_(bsz).fill_(-1) # assuming these always go together
 
         for b in xrange(bsz):
             ex_idx = batch_idx + b
@@ -186,8 +204,19 @@ class DataStuff(object):
                 self.spee_feats[-capped_len:, b, 1].copy_(
                     dat["%s_sid" % pfx][answer_idx-capped_len:answer_idx])
 
-            if args.use_choices:
-                self.choices[b].copy_(dat["%s_choices" % pfx][ex_idx])
+            if args.use_choices or (args.use_test_choices and not train):
+                bchoices = set(dat["%s_choices" % pfx][ex_idx])
+                [self.choicemask[b].__setitem__(jj, 1) for jj in xrange(max_ctx_len)
+                 if self.word_ctx[jj, b] in bchoices]
+
+            if self.use_qidx:
+                qpos = torch.nonzero(self.word_ctx[:, b] == self.query_idx)[0][0]
+                self.query_pos[b] = qpos*bsz + b
+
+        # if args.use_choices:
+        #     # get bsz x 2 tensor of idxs (need to transpose below to be right)
+        #     poss = torch.nonzero(self.word_ctx.t() == self.query_idx)
+        #     self.query_pos.copy_(poss[:, 1]) # 2nd col has nz col in transpose
 
         batch = {"words": self.word_ctx, "answers": self.answers}
         if args.std_feats:
@@ -195,8 +224,10 @@ class DataStuff(object):
             batch["extr"] = self.extr
         if args.speaker_feats:
             batch["spee_feats"] = self.spee_feats
-        if args.use_choices:
-            batch["choices"] = self.choices
+        if args.use_choices or (args.use_test_choices and not train):
+            batch["choicemask"] = self.choicemask
+        if self.use_qidx:
+            batch["qpos"] = self.query_pos
 
         if self.mt_loss == "idx-loss":
             if batch_idx not in self.cache:
