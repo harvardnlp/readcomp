@@ -30,6 +30,9 @@ parser.add_argument('-seed', type=int, default=0, help='')
 parser.add_argument('-gpuid', type=int, default=0, help='')
 parser.add_argument('-mt_loss', type=str, default='',
                     choices=["", "idx-loss", "ant-loss"], help='')
+parser.add_argument('-mt_step_mode', type=str, default='before',
+                    choices=["exact", "before-after", "before"],
+                    help='which rnn states to use when doing mt stuff')
 parser.add_argument('-logfile', type=str, default='')
 
 args = parser.parse_args()
@@ -40,8 +43,8 @@ cmd = "CUDA_VISIBLE_DEVICES=%(gpuid)d python train2.py -datafile NE_cbt.hdf5 -dr
       "-std_feats -speaker_feats -emb_size %(emb_size)d -rnn_size %(emb_size)d -log_interval 1000 "\
       "-bsz 64 -add_inp -cuda -clip %(clip)g %(use_choices)s -maxseqlen 1500 %(use_qidx)s "\
       "%(mt_loss)s -max_entities %(max_entities)d -max_mentions %(max_mentions)d "\
-      "-transform_for_ants -mt_step_mode before -beta1 %(beta1)g -mt_coeff %(mt_coeff)g "\
-      "%(relu)s %(mt_drop)s -lr %(lr)g -epochs 3 | tee -a %(logfile)s"
+      "-transform_for_ants -mt_step_mode %(mt_step_mode)s -beta1 %(beta1)g -mt_coeff %(mt_coeff)g "\
+      "%(relu)s %(mt_drop)s -lr %(lr)g -epochs 4 | tee -a %(logfile)s"
 
 for i in xrange(args.ntrials):
     # randomly sample stuff
@@ -53,14 +56,19 @@ for i in xrange(args.ntrials):
             val = "-" + key
         if key == "use_choices" and not isinstance(val, str): # was False
             val = "-use_test_choices"
-        params[key] = val
+        if not isinstance(val, bool):
+            params[key] = val
+        else:
+            params[key] = ""
+
     # fill in the rest of the stuff
     params["gpuid"] = args.gpuid
     if args.mt_loss == "":
         params["mt_loss"] = ""
     else:
         params["mt_loss"] = "-mt_loss %s " % args.mt_loss
-    params["-logfile"] = args.logfile
+    params["mt_step_mode"] = args.mt_step_mode
+    params["logfile"] = args.logfile
     pcmd = cmd % params
     print "running", pcmd
     try:
