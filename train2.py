@@ -324,6 +324,7 @@ parser.add_argument('-dropout', type=float, default=0, help='dropout')
 parser.add_argument('-topdrop', action='store_true', help='dropout on last rnn layer')
 parser.add_argument('-mt_drop', action='store_true', help='dropout before mt decoder')
 parser.add_argument('-relu', action='store_true', help='relu for input mlp')
+parser.add_argument('-eval_only', action='store_true', help='whether to evaluate only on validation data')
 
 parser.add_argument('-optim', type=str, default='adam', help='')
 parser.add_argument('-lr', type=float, default=0.001, help='learning rate')
@@ -429,14 +430,18 @@ if __name__ == "__main__":
         print "val epoch %d | acc: %g (%d / %d)" % (epoch, acc, ncorrect, total)
         return acc
 
-    best_acc = 0
-    for epoch in xrange(1, args.epochs+1):
-        train(epoch)
-        acc = evaluate(epoch)
-        if acc > best_acc:
-            best_acc = acc
-            if len(args.save) > 0:
-                print "saving to", args.save
-                state = {"opt": args, "state_dict": net.state_dict()}
-                torch.save(state, args.save)
-        print
+    if args.eval_only and len(args.load) > 0:
+      acc = evaluate(0)
+      print 'accuracy on validation = {}'.format(acc)
+    else:
+      best_acc = 0
+      for epoch in xrange(1, args.epochs+1):
+          train(epoch)
+          acc = evaluate(epoch)
+          if acc > best_acc:
+              best_acc = acc
+              if len(args.save) > 0:
+                  print "saving to", args.save
+                  state = {"opt": args, "state_dict": net.state_dict()}
+                  torch.save(state, args.save)
+          print
