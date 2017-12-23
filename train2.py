@@ -232,7 +232,7 @@ def predict(batch, scores):
     answers - bsz
     """
     bsz, seqlen = scores.size()
-    preds = np.zeros(bsz) - 1
+    preds = np.zeros(bsz, dtype=int) - 1
     words, answers = batch["words"].data, batch["answers"].data
     for b in xrange(bsz):
         word2prob = defaultdict(float)
@@ -428,7 +428,7 @@ if __name__ == "__main__":
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
             word_scores, mt_scores = net(batch, val=True)
             preds, answers = predict(batch, word_scores)
-            ncorrect = np.sum(preds == answers)
+            ncorrect = np.sum(preds == answers.cpu().numpy())
             total += bsz
 
             if args.analysis:
