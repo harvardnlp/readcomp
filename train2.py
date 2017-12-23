@@ -8,6 +8,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
+import numpy as np
 
 import datastuff
 
@@ -224,25 +225,24 @@ class Reader(nn.Module):
                            ant_states.transpose(0, 1).transpose(1, 2))
         return scores
 
-def get_ncorrect(batch, scores):
+def predict(batch, scores):
     """
     i'm just gonna brute force this
     scores - bsz x seqlen
     answers - bsz
     """
     bsz, seqlen = scores.size()
+    preds = np.zeros(bsz) - 1
     words, answers = batch["words"].data, batch["answers"].data
-    ncorrect = 0
     for b in xrange(bsz):
         word2prob = defaultdict(float)
-        best, best_prob = -1, -float("inf")
+        best_prob = -float("inf")
         for i in xrange(seqlen):
             word2prob[words[i][b]] += scores.data[b][i]
             if word2prob[words[i][b]] > best_prob:
-                best = words[i][b]
+                preds[b] = words[i][b]
                 best_prob = word2prob[words[i][b]]
-        ncorrect += (best == answers[b])
-    return ncorrect
+    return preds, answers
 
 
 def attn_sum_loss(batch, scores):
@@ -325,6 +325,7 @@ parser.add_argument('-topdrop', action='store_true', help='dropout on last rnn l
 parser.add_argument('-mt_drop', action='store_true', help='dropout before mt decoder')
 parser.add_argument('-relu', action='store_true', help='relu for input mlp')
 parser.add_argument('-eval_only', action='store_true', help='whether to evaluate only on validation data')
+parser.add_argument('-analysis', action='store_true', help='run analysis e.g. mt accuracy, speaker id accuracy')
 
 parser.add_argument('-optim', type=str, default='adam', help='')
 parser.add_argument('-lr', type=float, default=0.001, help='learning rate')
@@ -417,31 +418,45 @@ if __name__ == "__main__":
 
 
     def evaluate(epoch):
+        net.train(False)
         total, ncorrect = 0, 0
+        total_speaker, ncorrect_speaker = 0, 0
         for i in xrange(len(val_batch_start_idxs)):
             batch = data.load_data(val_batch_start_idxs[i], args, train=False) # a dict
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
-            word_scores, _ = net(batch, val=True)
-            ncorrect += get_ncorrect(batch, word_scores)
+            word_scores, mt_scores = net(batch, val=True)
+            preds, answers = predict(batch, word_scores)
+            ncorrect = np.sum(preds == answers)
             total += bsz
+
+            if args.analysis:
+                print 'preds'
+                print preds
+                print 'answers'
+                print answers
+                print 'mt_scores'
+                print mt_scores
+                mt_scores.foo()
+
         acc = float(ncorrect)/total
         print "val epoch %d | acc: %g (%d / %d)" % (epoch, acc, ncorrect, total)
         return acc
 
     if args.eval_only and len(args.load) > 0:
-      acc = evaluate(0)
-      print 'accuracy on validation = {}'.format(acc)
+        print 'entering eval-only mode using model from {}'.format(args.load)
+        acc = evaluate(0)
+        print 'accuracy on validation = {}'.format(acc)
     else:
-      best_acc = 0
-      for epoch in xrange(1, args.epochs+1):
-          train(epoch)
-          acc = evaluate(epoch)
-          if acc > best_acc:
-              best_acc = acc
-              if len(args.save) > 0:
-                  print "saving to", args.save
-                  state = {"opt": args, "state_dict": net.state_dict()}
-                  torch.save(state, args.save)
-          print
+        best_acc = 0
+        for epoch in xrange(1, args.epochs+1):
+            train(epoch)
+            acc = evaluate(epoch)
+            if acc > best_acc:
+                best_acc = acc
+                if len(args.save) > 0:
+                    print "saving to", args.save
+                    state = {"opt": args, "state_dict": net.state_dict()}
+                    torch.save(state, args.save)
+            print
