@@ -428,14 +428,14 @@ if __name__ == "__main__":
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
             word_scores, mt_scores = net(batch, val=True)
             preds, answers = predict(batch, word_scores)
-            ncorrect = np.sum(preds == answers.cpu().numpy())
+            ncorrect += np.sum(preds == answers.cpu().numpy())
             total += bsz
 
             if args.analysis:
                 print 'preds'
                 print preds
                 print 'answers'
-                print answers
+                print answers.cpu().numpy()
                 print 'mt_scores'
                 print mt_scores
                 mt_scores.foo()
