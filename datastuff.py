@@ -73,9 +73,7 @@ class DataStuff(object):
         # word_embeddings'
         dat = {}
         for key in h5dat.keys():
-            if key.startswith("train") or key.startswith("valid"):
-                dat[key] = torch.from_numpy(h5dat[key][:])
-            elif key == "test_data" or key == "test_sid": # just for vocab purposes
+            if key.startswith("train") or key.startswith("valid") or key.startswith("test"):
                 dat[key] = torch.from_numpy(h5dat[key][:])
 
         words_new2old, words_old2new = reduce_vocab([dat["train_data"], dat["valid_data"],
@@ -84,12 +82,12 @@ class DataStuff(object):
         self.words_new2old, self.words_old2new = words_new2old, words_old2new
 
         # replace words w/ new vocab
-        for key in ['train_data', 'valid_data']:
+        for key in ['train_data', 'valid_data', 'test_data']:
             for i in xrange(dat[key].size(0)):
                 dat[key][i] = words_old2new[dat[key][i]]
 
         if args.use_choices or args.use_test_choices:
-            for key in ['train_choices', 'valid_choices']:
+            for key in ['train_choices', 'valid_choices', 'test_choices']:
                 vec = dat[key].view(-1)
                 for i in xrange(vec.size(0)):
                     vec[i] = words_old2new[vec[i]]
@@ -107,12 +105,12 @@ class DataStuff(object):
             self.sid_new2old, self.sid_old2new = sid_new2old, sid_old2new
 
             # replace
-            for key in ['train_sid', 'valid_sid']:
+            for key in ['train_sid', 'valid_sid', 'test_sid']:
                 for i in xrange(dat[key].size(0)):
                     dat[key][i] = sid_old2new[dat[key][i]]
 
         # make offsets 0-indexed
-        for key in ['train_location', 'valid_location']:
+        for key in ['train_location', 'valid_location', 'test_location']:
             dat[key][:, 0].sub_(1) # first column is offsets
 
         self.ntrain = dat["train_location"].size(0)
@@ -124,18 +122,22 @@ class DataStuff(object):
         pos_voc_size = h5dat['post_vocab_size'][:][0]+1
         self.dat["train_ner"].add_(pos_voc_size)
         self.dat["valid_ner"].add_(pos_voc_size)
+        self.dat["test_ner" ].add_(pos_voc_size)
         self.per_idx = 2 + pos_voc_size # 2 is PERSON
         ner_voc_size = h5dat['ner_vocab_size'][:][0]+1
         self.dat["train_sentence"].add_(pos_voc_size+ner_voc_size)
         self.dat["valid_sentence"].add_(pos_voc_size+ner_voc_size)
+        self.dat["test_sentence" ].add_(pos_voc_size+ner_voc_size)
         #sent_voc_size = h5dat['sent_vocab_size'][:][0]+1
         self.feat_voc_size = max(self.dat["train_sentence"].max(),
-                                 self.dat["valid_sentence"].max())+1
+                                 self.dat["valid_sentence"].max(),
+                                 self.dat["test_sentence" ].max())+1
 
         spee_voc_size = h5dat['spee_vocab_size'][:][0]+1
         self.dat["train_sid"].add_(spee_voc_size)
         self.dat["valid_sid"].add_(spee_voc_size)
-        self.spee_feat_foc_size = max(self.dat["train_sid"].max(), self.dat["valid_sid"].max())+1
+        self.dat["test_sid" ].add_(spee_voc_size)
+        self.spee_feat_foc_size = max(self.dat["train_sid"].max(), self.dat["valid_sid"].max(), self.dat["test_sid"].max())+1
 
         self.extra_size = dat["train_extr"].size(1)
         self.mt_loss = args.mt_loss
