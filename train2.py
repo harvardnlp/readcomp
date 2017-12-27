@@ -445,7 +445,7 @@ if __name__ == "__main__":
         return acc
 
 
-    def evaluate(epoch):
+    def evaluate_all(epoch):
         acc_valid = evaluate(epoch, 'valid', val_batch_start_idxs)
         acc_test  = evaluate(epoch, 'test',  test_batch_start_idxs)
         return acc_valid
@@ -453,13 +453,13 @@ if __name__ == "__main__":
 
     if args.eval_only and len(args.load) > 0:
         print 'entering eval-only mode using model from {}'.format(args.load)
-        acc = evaluate(0)
+        acc = evaluate_all(0)
         print 'accuracy on validation = {}'.format(acc)
     else:
         best_acc = 0
         for epoch in xrange(1, args.epochs+1):
             train(epoch)
-            acc = evaluate(epoch)
+            acc = evaluate_all(epoch)
             if acc > best_acc:
                 best_acc = acc
                 if len(args.save) > 0:
