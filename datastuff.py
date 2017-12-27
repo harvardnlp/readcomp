@@ -117,6 +117,7 @@ class DataStuff(object):
 
         self.ntrain = dat["train_location"].size(0)
         self.nvalid = dat["valid_location"].size(0)
+        self.ntest  = dat["test_location"].size(0)
         self.dat = dat
 
         # we need to increment feature indexes so we don't overlap
@@ -156,13 +157,14 @@ class DataStuff(object):
         h5dat.close()
 
 
-    def load_data(self, batch_idx, args, train=True):
+    def load_data(self, batch_idx, args, data_mode='train'):
         """
         dat is a dict w/ all the data stuff
         batch_idx is the idx of first thing in the batch
         """
         dat = self.dat
-        pfx = "train" if train else "valid"
+        pfx = data_mode
+        train = data_mode == 'train'
         loc = dat["%s_location" % pfx] # nexamples x 3
         bsz = min(args.bsz, loc.size(0)-batch_idx)
         max_ctx_len = min(args.maxseqlen, loc[batch_idx:batch_idx+bsz, 1].max())

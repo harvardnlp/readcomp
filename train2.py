@@ -379,6 +379,7 @@ if __name__ == "__main__":
 
     batch_start_idxs = range(0, data.ntrain, args.bsz)
     val_batch_start_idxs = range(0, data.nvalid, args.bsz)
+    test_batch_start_idxs = range(0, data.ntest, args.bsz)
 
     def train(epoch):
         pred_loss, mt_loss, ndocs = 0, 0, 0
@@ -389,7 +390,7 @@ if __name__ == "__main__":
             #    break
             net.zero_grad()
             batch = data.load_data(batch_start_idxs[trainperm[batch_idx]],
-                                   args, train=True) # a dict
+                                   args, data_mode='train') # a dict
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k])
@@ -417,12 +418,11 @@ if __name__ == "__main__":
         print "train epoch %d | loss %g | mt-los %g" % (epoch, pred_loss/ndocs, mt_loss/ndocs)
 
 
-    def evaluate(epoch):
-        net.train(False)
+    def evaluate(epoch, data_mode, data_batch_start_idxs):
+        net.eval()
         total, ncorrect = 0, 0
-        total_speaker, ncorrect_speaker = 0, 0
-        for i in xrange(len(val_batch_start_idxs)):
-            batch = data.load_data(val_batch_start_idxs[i], args, train=False) # a dict
+        for i in xrange(len(data_batch_start_idxs)):
+            batch = data.load_data(data_batch_start_idxs[i], args, data_mode) # a dict
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
@@ -431,18 +431,25 @@ if __name__ == "__main__":
             ncorrect += np.sum(preds == answers.cpu().numpy())
             total += bsz
 
-            if args.analysis:
-                print 'preds'
-                print preds
-                print 'answers'
-                print answers.cpu().numpy()
-                print 'mt_scores'
-                print mt_scores
-                mt_scores.foo()
+            # if args.analysis:
+            #     print 'preds'
+            #     print preds
+            #     print 'answers'
+            #     print answers.cpu().numpy()
+            #     print 'mt_scores'
+            #     print mt_scores
+            #     mt_scores.foo()
 
         acc = float(ncorrect)/total
-        print "val epoch %d | acc: %g (%d / %d)" % (epoch, acc, ncorrect, total)
+        print "%s epoch %d | acc: %g (%d / %d)" % (data_mode, epoch, acc, ncorrect, total)
         return acc
+
+
+    def evaluate(epoch):
+        acc_valid = evaluate(epoch, 'valid', val_batch_start_idxs)
+        acc_test  = evaluate(epoch, 'test',  test_batch_start_idxs)
+        return acc_valid
+
 
     if args.eval_only and len(args.load) > 0:
         print 'entering eval-only mode using model from {}'.format(args.load)
