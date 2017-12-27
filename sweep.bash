@@ -52,36 +52,27 @@ fi
 
 gpuid=0
 class=("asr")
-seed=(101 7 1)
-batch=(32 16)
+seed=(13)
+batch=(64)
 embed=(128)
 adam=("{0.9, 0.999}")
 cutoff=(10)
-post=(80 50)
-dropout=(0.1 0 0.5)
-attstack=(3 2 1)
-atthead=(4 3 2 1)
-dff=(512 128 32 8)
-extra="--dontsave --datafile lambada-small.hdf5"
+entity=(2 3 5 10)
+dropout=(0.2)
+extra="--dontsave --datafile cbt.hdf5 --postsize 128  --nersize 128 --sentsize 80 --speesize 80 --std_feats --ent_feats --disc_feats --speaker_feats --use_choices --lr 0.001 --maxseqlen 1500"
 for cls in "${class[@]}"; do
   for rs in "${seed[@]}"; do
     for b in "${batch[@]}"; do
       for d0 in "${embed[@]}"; do
         for ad in "${adam[@]}"; do
           for c in "${cutoff[@]}"; do
-            for pst in "${post[@]}"; do
+            for ent in "${entity[@]}"; do
               for dr in "${dropout[@]}"; do
-                for as in "${attstack[@]}"; do
-                  for ah in "${atthead[@]}"; do
-                    for df in "${dff[@]}"; do
-                      gpuid=$((gpuid % numgpu + 1))
-                      if [ "$gpuid" = "$gpu" ]; then
-                        printf "iteration = $t: th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --attstack $as --atthead $ah --dff $df --batchsize $b --maxepoch $N --hiddensize {$d0} --postsize $pst --cutoff $c $extra --adamconfig $ad\n" >> $OUTFILE
-                        th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --attstack $as --atthead $ah --dff $df --batchsize $b --maxepoch $N --hiddensize {$d0} --postsize $pst --cutoff $c $extra --adamconfig "$ad" >> $OUTFILE
-                      fi
-                    done
-                  done
-                done
+                gpuid=$((gpuid % numgpu + 1))
+                if [ "$gpuid" = "$gpu" ]; then
+                  printf "iteration = $t: th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --batchsize $b --maxepoch $N --hiddensize {$d0} --entity $ent --entitysize $ent --cutoff $c $extra --adamconfig $ad\n" >> $OUTFILE
+                  th $codefile --cuda --device $gpuid --randomseed $rs --model $cls --dropout $dr --batchsize $b --maxepoch $N --hiddensize {$d0} --entity $ent --entitysize $ent --cutoff $c $extra --adamconfig "$ad" >> $OUTFILE
+                fi
               done
             done
           done

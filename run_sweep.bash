@@ -33,7 +33,7 @@ if [ -e $OUTFILE ]; then
 fi
 echo "Output File = " $OUTFILE
 
-codefile="train.lua"
+codefile="nutrain.lua"
 echo "Code file = " $codefile
 
 # copy code file and sweep file
