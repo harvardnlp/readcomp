@@ -343,6 +343,9 @@ args = parser.parse_args()
 if __name__ == "__main__":
     print args
 
+    np.set_printoptions(threshold=np.nan)
+
+
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
         if not args.cuda:
@@ -423,6 +426,7 @@ if __name__ == "__main__":
         total, ncorrect = 0, 0
         for i in xrange(len(data_batch_start_idxs)):
             batch = data.load_data(data_batch_start_idxs[i], args, data_mode) # a dict
+
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
@@ -431,6 +435,14 @@ if __name__ == "__main__":
             ncorrect += np.sum(preds == answers.cpu().numpy())
             total += bsz
 
+
+            print('batch["words"]')
+            print(batch["words"].data.cpu().numpy()[:,0].T)
+            print('preds[0]')
+            print(preds[0])
+            print('answers[0]')
+            print(answers[0])
+            foo()
             # if args.analysis:
             #     print 'preds'
             #     print preds
