@@ -15,6 +15,7 @@ import re
 import nltk
 import time
 import datamodel
+import datastuff
 
 args = {}
 
@@ -28,11 +29,11 @@ def rindex(mylist, myvalue):
   return index
 
 
-def inter_translate(idx2word):
+def inter_translate(idx2word, words_new2old, words_old2new):
   input = raw_input('Enter sentence to translate: ')
   while input != 'q' and input != 'quit':
     tokens = input.split()
-    print(' '.join([idx2word[int(t)] for t in tokens]))
+    print(' '.join([idx2word[words_new2old[int(t)]] for t in tokens]))
     input = raw_input('Enter sentence to translate: ')
 
 
@@ -56,13 +57,7 @@ def load_file(file):
       'ner': np.array(f['valid_ner'], dtype=int),
       'location': np.array(f['valid_location'], dtype=int),
     }
-    control = {
-      'data': np.array(f['control_data'], dtype=int),
-      'post': np.array(f['control_post'], dtype=int),
-      'ner': np.array(f['control_ner'], dtype=int),
-      'location': np.array(f['control_location'], dtype=int),
-    }
-  return train,test,valid,control
+  return train,test,valid
 
 
 def validate_tensor(corpus, t):
@@ -96,33 +91,31 @@ def validate_tensor(corpus, t):
 
 
 def validate(corpus, file):
-  train,test,valid,control = load_file(file)
+  train,test,valid = load_file(file)
   print('NOTE: this does not validate extra features such as token frequency etc...')
   validate_tensor(corpus, train)
   validate_tensor(corpus, test)
   validate_tensor(corpus, valid)
-  validate_tensor(corpus, control)
   print('Validation Passed')
 
 
 def debug_translate(corpus, file, mode):
-  if mode == 'text':
-    inter_translate(corpus.dictionary.idx2word)
-  elif mode == 'postag':
-    inter_translate({v: k for k, v in corpus.dictionary.post2idx.iteritems()})
-  elif mode == 'nertag':
-    inter_translate({v: k for k, v in corpus.dictionary.ner2idx.iteritems()})
-  else:
-    train,test,valid,control = load_file(file)
+  train, test, valid = load_file(file)
+  words_new2old, words_old2new = datastuff.reduce_vocab([train["data"], valid["data"], test["data"]])
 
+  if mode == 'text':
+    inter_translate(corpus.dictionary.idx2word, words_new2old, words_old2new)
+  elif mode == 'postag':
+    inter_translate({v: k for k, v in corpus.dictionary.post2idx.iteritems()}, words_new2old, words_old2new)
+  elif mode == 'nertag':
+    inter_translate({v: k for k, v in corpus.dictionary.ner2idx.iteritems()}, words_new2old, words_old2new)
+  else:
     file_type = raw_input('Which dataset to translate? (train/test/valid/control, default = train): ')
     to_translate = train
     if file_type == 'test':
       to_translate = test
     elif file_type == 'valid':
       to_translate = valid
-    elif file_type == 'control':
-      to_translate = control
 
     # sort by increasing offset to view sequentially (easier for debug)
     to_translate['location'] = to_translate['location'][np.argsort(to_translate['location'][:,0])]
