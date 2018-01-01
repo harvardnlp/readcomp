@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 import numpy as np
+import time
 
 import datastuff
 
@@ -345,6 +346,7 @@ if __name__ == "__main__":
 
     np.set_printoptions(threshold=np.nan)
 
+    time_start = time.time()
 
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
@@ -424,6 +426,7 @@ if __name__ == "__main__":
     def evaluate(epoch, data_mode, data_batch_start_idxs):
         net.eval()
         total, ncorrect = 0, 0
+        anares = {}
         for i in xrange(len(data_batch_start_idxs)):
             batch = data.load_data(data_batch_start_idxs[i], args, data_mode) # a dict
 
@@ -435,25 +438,15 @@ if __name__ == "__main__":
             ncorrect += np.sum(preds == answers.cpu().numpy())
             total += bsz
 
-
-            print('batch["words"]')
-            print(batch["words"].data.cpu().numpy()[:,0].T)
-            print('preds[0]')
-            print(preds[0])
-            print('answers[0]')
-            print(answers[0])
-            foo()
-            # if args.analysis:
-            #     print 'preds'
-            #     print preds
-            #     print 'answers'
-            #     print answers.cpu().numpy()
-            #     print 'mt_scores'
-            #     print mt_scores
-            #     mt_scores.foo()
+            if args.analysis:
+                data.analyze_data(args.datafile.split('.')[0], batch, preds, answers, mt_scores, anares)
 
         acc = float(ncorrect)/total
-        print "%s epoch %d | acc: %g (%d / %d)" % (data_mode, epoch, acc, ncorrect, total)
+        print "*%s* epoch %d | acc: %g (%d / %d)" % (data_mode, epoch, acc, ncorrect, total)
+        for anamode in anares:
+            ncorrect = anares[anamode]['correct']
+            total = anares[anamode]['total']
+            print '{} | acc: {} ({} / {})'.format(anamode, float(ncorrect) / total, ncorrect, total)
         return acc
 
 
@@ -464,7 +457,7 @@ if __name__ == "__main__":
 
 
     if args.eval_only and len(args.load) > 0:
-        print 'entering eval-only mode using model from {}'.format(args.load)
+        print 'entering eval-only mode using model from *{}*'.format(args.load)
         acc = evaluate_all(0)
         print 'accuracy on validation = {}'.format(acc)
     else:
@@ -479,3 +472,7 @@ if __name__ == "__main__":
                     state = {"opt": args, "state_dict": net.state_dict()}
                     torch.save(state, args.save)
             print
+
+    time_end = time.time()
+
+    print 'Total elapsed time = {} secs'.format(time_end - time_start)

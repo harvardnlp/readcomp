@@ -30,10 +30,12 @@ def rindex(mylist, myvalue):
 
 
 def inter_translate(idx2word, words_new2old, words_old2new):
+  input_mode = raw_input('Convert to old index first? ([y]/n) ')
+  convert_to_old_index = input_mode == 'n'
   input = raw_input('Enter sentence to translate: ')
   while input != 'q' and input != 'quit':
     tokens = input.split()
-    print(' '.join([idx2word[words_new2old[int(t)]] for t in tokens]))
+    print(' '.join([idx2word[words_new2old[int(t)]] if convert_to_old_index else idx2word[int(t)] for t in tokens]))
     input = raw_input('Enter sentence to translate: ')
 
 
@@ -105,10 +107,6 @@ def debug_translate(corpus, file, mode):
 
   if mode == 'text':
     inter_translate(corpus.dictionary.idx2word, words_new2old, words_old2new)
-  elif mode == 'postag':
-    inter_translate({v: k for k, v in corpus.dictionary.post2idx.iteritems()}, words_new2old, words_old2new)
-  elif mode == 'nertag':
-    inter_translate({v: k for k, v in corpus.dictionary.ner2idx.iteritems()}, words_new2old, words_old2new)
   else:
     file_type = raw_input('Which dataset to translate? (train/test/valid/control, default = train): ')
     to_translate = train
@@ -136,7 +134,7 @@ def debug_translate(corpus, file, mode):
 
       print '1-BASED LINE INDEX = {}'.format(view_index + 1)
       print('CONTEXT')
-      print([corpus.dictionary.idx2word[token] for token in context])
+      print(' '.join([corpus.dictionary.idx2word[token] for token in context]))
 
       print('ANSWER')
       print(corpus.dictionary.idx2word[answer])

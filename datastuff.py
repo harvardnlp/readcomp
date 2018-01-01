@@ -4,6 +4,7 @@ data crud
 
 import torch
 import h5py
+from datamodel import Dictionary
 
 def reduce_vocab(word_vecs):
     """
@@ -249,6 +250,42 @@ class DataStuff(object):
             batch["mt2_targs"] = self.cache[batch_idx]
 
         return batch
+
+
+    def analyze_data(self, vocab_file_prefix, batch, preds, answers, mt_scores, anares = {}):
+        d = Dictionary()
+        d.read_from_file(vocab_file_prefix)
+        context = batch['words'].data.cpu().numpy()
+        seqlen, batchsize = context.shape
+
+        if len(anares) == 0:
+            anares['is_person'] = { 'correct': 0, 'total': 0 }
+            anares['is_speaker'] = { 'correct': 0, 'total': 0 }
+
+        for b in range(batchsize):
+            w = ' '.join([d.idx2word[self.words_new2old[int(t)]] for t in context[:,b]])
+            a = d.idx2word[self.words_new2old[int(answers[b])]]
+            p = d.idx2word[self.words_new2old[int(preds[b])]]
+
+            if 'speaker' in a:
+                anares['is_person']['total'] += 1
+                anares['is_person']['correct'] += 1 if answers[b] == preds[b] else 0
+
+                # check for conversation if there are quotes
+                if (" `` " in w and " '' " in w) or (" ` " in w and " ' " in w):
+                    anares['is_speaker']['total'] += 1
+                    anares['is_speaker']['correct'] += 1 if answers[b] == preds[b] else 0
+
+            # print 'batch["words"]'
+            # print batch["words"]
+            # print 'preds'
+            # print preds
+            # print 'answers'
+            # print answers.cpu().numpy()
+            # print 'mt_scores'
+            # print mt_scores
+            # foo()
+
 
     def del_word_embs(self):
         del self.word_embs
