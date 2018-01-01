@@ -5,6 +5,7 @@ data crud
 import torch
 import h5py
 from datamodel import Dictionary
+import numpy as np
 
 def reduce_vocab(word_vecs):
     """
@@ -237,17 +238,21 @@ class DataStuff(object):
             batch["qpos"] = self.query_pos
 
         if self.mt_loss == "idx-loss":
-            if batch_idx not in self.cache:
+            if data_mode not in self.cache:
+                self.cache[data_mode] = {}
+            if batch_idx not in self.cache[data_mode]:
                 targs = make_mt1_targ_idxs(batch, args.max_entities,
                                            args.max_mentions, self.per_idx)
-                self.cache[batch_idx] = targs
-            batch["mt1_targs"] = self.cache[batch_idx]
+                self.cache[data_mode][batch_idx] = targs
+            batch["mt1_targs"] = self.cache[data_mode][batch_idx]
         elif self.mt_loss == "ant-loss":
-            if batch_idx not in self.cache:
+            if data_mode not in self.cache:
+                self.cache[data_mode] = {}
+            if batch_idx not in self.cache[data_mode]:
                 targs = make_mt2_targs(batch, args.max_entities,
                                        args.max_mentions, self.per_idx)
-                self.cache[batch_idx] = targs
-            batch["mt2_targs"] = self.cache[batch_idx]
+                self.cache[data_mode][batch_idx] = targs
+            batch["mt2_targs"] = self.cache[data_mode][batch_idx]
 
         return batch
 
@@ -261,6 +266,19 @@ class DataStuff(object):
         if len(anares) == 0:
             anares['is_person'] = { 'correct': 0, 'total': 0 }
             anares['is_speaker'] = { 'correct': 0, 'total': 0 }
+            anares['mt_is_person'] = { 'correct': 0, 'total': 0 }
+            anares['mt_is_speaker'] = { 'correct': 0, 'total': 0 }
+
+        if self.mt_loss == "idx-loss":
+            mt_answers = batch["mt1_targs"].data.cpu().numpy() # seqlen x batchsize
+            mt_mask = mt_answers != 0
+            mt_scores = mt_scores.data.cpu().numpy().reshape(seqlen, batchsize, -1)
+            mt_preds = np.argmax(mt_scores, 2)
+            mt_diff = mt_preds[mt_mask] - mt_answers[mt_mask]
+            anares['mt_is_person']['total'] += np.sum(mt_mask)
+            anares['mt_is_person']['correct'] += np.sum(mt_diff == 0)
+        else:
+            print '{} multitask analysis not supported yet'.format(self.mt_loss)
 
         for b in range(batchsize):
             w = ' '.join([d.idx2word[self.words_new2old[int(t)]] for t in context[:,b]])
@@ -276,15 +294,12 @@ class DataStuff(object):
                     anares['is_speaker']['total'] += 1
                     anares['is_speaker']['correct'] += 1 if answers[b] == preds[b] else 0
 
-            # print 'batch["words"]'
-            # print batch["words"]
-            # print 'preds'
-            # print preds
-            # print 'answers'
-            # print answers.cpu().numpy()
-            # print 'mt_scores'
-            # print mt_scores
-            # foo()
+                    b_mt_mask = mt_mask[:,b]
+                    mt_diff = mt_preds[:,b][b_mt_mask] - mt_answers[:,b][b_mt_mask]
+
+                    if self.mt_loss == "idx-loss":
+                        anares['mt_is_speaker']['total'] += np.sum(b_mt_mask)
+                        anares['mt_is_speaker']['correct'] += np.sum(mt_diff == 0)
 
 
     def del_word_embs(self):
