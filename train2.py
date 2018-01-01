@@ -52,6 +52,7 @@ class Reader(nn.Module):
                 self.ant_lin = nn.Linear(2*opt.rnn_size, trans_size, bias=False)
         self.topdrop, self.mt_drop = opt.topdrop, opt.mt_drop
         self.use_choices, self.use_test_choices = opt.use_choices, opt.use_test_choices
+        self.use_qidx = opt.use_qidx
         self.init_weights(word_embs, words_new2old)
 
 
@@ -132,7 +133,7 @@ class Reader(nn.Module):
         states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*2*rnn_size
         doc_states = states[:, :, self.rnn_size:3*self.rnn_size]
 
-        if args.use_qidx:
+        if self.use_qidx:
             # get states before and after the question idx
             b4states = states.view(-1, states.size(2))[batch["qpos"]-bsz][:, :self.rnn_size]
             afterstates = states.view(-1, states.size(2))[batch["qpos"]+bsz][:, -self.rnn_size:]
@@ -339,6 +340,7 @@ parser.add_argument('-log_interval', type=int, default=200, help='')
 
 parser.add_argument('-cuda', action='store_true', help='')
 args = parser.parse_args()
+saved_args, saved_state = None, None
 
 
 if __name__ == "__main__":
@@ -356,15 +358,15 @@ if __name__ == "__main__":
             torch.cuda.manual_seed(args.seed)
 
     # make data
-    data = datastuff.DataStuff(args)
-
-    saved_args, saved_state = None, None
     if len(args.load) > 0:
         saved_stuff = torch.load(args.load)
         saved_args, saved_state = saved_stuff["opt"], saved_stuff["state_dict"]
+        saved_args.datafile = args.datafile
+        data = datastuff.DataStuff(saved_args)
         net = Reader(data.word_embs, data.words_new2old, saved_args)
         net.load_state_dict(saved_state)
     else:
+        data = datastuff.DataStuff(args)
         args.wordtypes = len(data.words_new2old)
         args.ftypes = data.feat_voc_size
         args.sptypes = data.spee_feat_foc_size
@@ -427,8 +429,9 @@ if __name__ == "__main__":
         net.eval()
         total, ncorrect = 0, 0
         anares = {}
+        reload_args = saved_args if saved_args is not None else args
         for i in xrange(len(data_batch_start_idxs)):
-            batch = data.load_data(data_batch_start_idxs[i], args, data_mode) # a dict
+            batch = data.load_data(data_batch_start_idxs[i], reload_args, data_mode) # a dict
 
             bsz = batch["words"].size(1)
             for k in batch:
@@ -439,7 +442,7 @@ if __name__ == "__main__":
             total += bsz
 
             if args.analysis:
-                data.analyze_data(args.datafile.split('.')[0], batch, preds, answers, mt_scores, anares)
+                data.analyze_data(reload_args.datafile.split('.')[0], batch, preds, answers, mt_scores, anares)
 
         acc = float(ncorrect)/total
         print "*%s* epoch %d | acc: %g (%d / %d)" % (data_mode, epoch, acc, ncorrect, total)

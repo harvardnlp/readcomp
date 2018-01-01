@@ -277,7 +277,7 @@ class DataStuff(object):
             mt_diff = mt_preds[mt_mask] - mt_answers[mt_mask]
             anares['mt_is_person']['total'] += np.sum(mt_mask)
             anares['mt_is_person']['correct'] += np.sum(mt_diff == 0)
-        else:
+        elif len(self.mt_loss) > 0:
             print '{} multitask analysis not supported yet'.format(self.mt_loss)
 
         for b in range(batchsize):
