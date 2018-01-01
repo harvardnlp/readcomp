@@ -449,7 +449,8 @@ if __name__ == "__main__":
         for anamode in anares:
             ncorrect = anares[anamode]['correct']
             total = anares[anamode]['total']
-            print '{} | acc: {} ({} / {})'.format(anamode, float(ncorrect) / total, ncorrect, total)
+            if total > 0:
+                print '{} | acc: {} ({} / {})'.format(anamode, float(ncorrect) / total, ncorrect, total)
         return acc
 
 
