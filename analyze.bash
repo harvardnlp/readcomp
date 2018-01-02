@@ -3,7 +3,12 @@
 trap "kill 0" SIGINT # allow to kill all spawning processes in the same group
 
 # ------------------- Test on various best models --------------------------
-python train2.py -load 'models/best/lamb-idx-best.pt' -eval_only -analysis -cuda -datafile lambada.hdf5
+python train2.py -datafile lambada.hdf5 -load 'models/best/lamb-reg-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile lambada.hdf5 -load 'models/best/lamb-idx-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile lambada.hdf5 -load 'models/best/lamb-ant-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile cbtest.hdf5 -load 'models/best/cbtne-reg-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile cbtest.hdf5 -load 'models/best/cbtne-idx-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile cbtest.hdf5 -load 'models/best/cbtne-ant-best.pt' -cuda -eval_only -analysis
 
 # ------------------- LAMBADA --------------------------
 
@@ -11,7 +16,7 @@ python train2.py -load 'models/best/lamb-idx-best.pt' -eval_only -analysis -cuda
 
 # python train2.py -cuda -seed 13 -dropout 0.2 -bsz 64 -epochs 1 -rnn_size 256 -max_entities 5 -max_mentions 5 -clip 10 -datafile lambada.hdf5 -emb_size 128 -std_feats -speaker_feats -maxseqlen 1028 -mt_loss idx-loss -log_interval 1000 -save 'models/lambada.t7'
 
-python train2.py -load 'models/lambada.t7' -datafile lambada.hdf5 -std_feats -speaker_feats -emb_size 128 -rnn_size 256 -log_interval 1000 -bsz 64 -cuda -clip 10 -maxseqlen 1028 -mt_loss idx-loss -max_entities 5 -max_mentions 5 -eval_only -analysis
+# python train2.py -load 'models/lambada.t7' -datafile lambada.hdf5 -std_feats -speaker_feats -emb_size 128 -rnn_size 256 -log_interval 1000 -bsz 64 -cuda -clip 10 -maxseqlen 1028 -mt_loss idx-loss -max_entities 5 -max_mentions 5 -eval_only -analysis
 
 # ------------------- CBT --------------------------
 
