@@ -278,7 +278,8 @@ class DataStuff(object):
             anares['mt_is_person']['total'] += np.sum(mt_mask)
             anares['mt_is_person']['correct'] += np.sum(mt_diff == 0)
         elif len(self.mt_loss) > 0:
-            print '{} multitask analysis not supported yet'.format(self.mt_loss)
+            # print '{} multitask analysis not supported yet'.format(self.mt_loss)
+            pass
 
         for b in range(batchsize):
             w = ' '.join([d.idx2word[self.words_new2old[int(t)]] for t in context[:,b]])
@@ -294,10 +295,9 @@ class DataStuff(object):
                     anares['is_speaker']['total'] += 1
                     anares['is_speaker']['correct'] += 1 if answers[b] == preds[b] else 0
 
-                    b_mt_mask = mt_mask[:,b]
-                    mt_diff = mt_preds[:,b][b_mt_mask] - mt_answers[:,b][b_mt_mask]
-
                     if self.mt_loss == "idx-loss":
+                        b_mt_mask = mt_mask[:,b]
+                        mt_diff = mt_preds[:,b][b_mt_mask] - mt_answers[:,b][b_mt_mask]
                         anares['mt_is_speaker']['total'] += np.sum(b_mt_mask)
                         anares['mt_is_speaker']['correct'] += np.sum(mt_diff == 0)
 
