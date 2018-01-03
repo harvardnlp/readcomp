@@ -260,7 +260,7 @@ class DataStuff(object):
     def analyze_data(self, vocab_file_prefix, batch, preds, answers, mt_scores, anares = {}):
         d = Dictionary()
         d.read_from_file(vocab_file_prefix)
-        context = batch['words'].data.cpu().numpy()
+        context = batch['words'].data.cpu().numpy() # seqlen x bsz
         seqlen, batchsize = context.shape
 
         if len(anares) == 0:
@@ -277,9 +277,9 @@ class DataStuff(object):
             mt_diff = mt_preds[mt_mask] - mt_answers[mt_mask]
             anares['mt_is_person']['total'] += np.sum(mt_mask)
             anares['mt_is_person']['correct'] += np.sum(mt_diff == 0)
-        elif len(self.mt_loss) > 0:
-            # print '{} multitask analysis not supported yet'.format(self.mt_loss)
-            pass
+        elif self.mt_loss == 'ant-loss':
+            mt_answers = batch["mt2_targs"].data.cpu().numpy() # bsz x seqlen
+            mt_scores = mt_scores.data.cpu().numpy() # bsz x seqlen x seqlen
 
         for b in range(batchsize):
             w = ' '.join([d.idx2word[self.words_new2old[int(t)]] for t in context[:,b]])
@@ -291,7 +291,8 @@ class DataStuff(object):
                 anares['is_person']['correct'] += 1 if answers[b] == preds[b] else 0
 
                 # check for conversation if there are quotes
-                if (" `` " in w and " '' " in w) or (" ` " in w and " ' " in w):
+                contains_speech = (" `` " in w and " '' " in w) or (" ` " in w and " ' " in w)
+                if contains_speech:
                     anares['is_speaker']['total'] += 1
                     anares['is_speaker']['correct'] += 1 if answers[b] == preds[b] else 0
 
@@ -300,6 +301,30 @@ class DataStuff(object):
                         mt_diff = mt_preds[:,b][b_mt_mask] - mt_answers[:,b][b_mt_mask]
                         anares['mt_is_speaker']['total'] += np.sum(b_mt_mask)
                         anares['mt_is_speaker']['correct'] += np.sum(mt_diff == 0)
+                
+                if self.mt_loss == "ant-loss":
+                    # mt_scores is bsz x seqlen x seqlen
+                    for s1 in range(seqlen):
+                        if mt_answers[b,s1] > 0: # if repeated entity
+                            anares['mt_is_person']['total'] += 1
+                            anares['mt_is_speaker']['total'] += 1 if contains_speech else 0
+                            w2p = {}
+                            max_w, max_p = 0, 0
+                            for s2 in range(s1 - 1):
+                                cw = context[s2,b]
+                                if cw not in w2p:
+                                    w2p[cw] = 0
+                                w2p[cw] += mt_scores[b,s1,s2]
+                                if max_p < w2p[cw]:
+                                    max_w = cw
+                                    max_p = w2p[cw]
+                            if max_w == context[s1,b]:
+                                anares['mt_is_person']['correct'] += 1
+                                anares['mt_is_speaker']['correct'] += 1 if contains_speech else 0
+                        
+
+
+
 
 
     def del_word_embs(self):
