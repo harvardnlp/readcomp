@@ -3,12 +3,14 @@
 trap "kill 0" SIGINT # allow to kill all spawning processes in the same group
 
 # ------------------- Test on various best models --------------------------
+python train2.py -datafile lambada.hdf5 -load 'models/best/lamb-nofeats-best.pt' -cuda -eval_only -analysis
 python train2.py -datafile lambada.hdf5 -load 'models/best/lamb-reg-best.pt' -cuda -eval_only -analysis
 python train2.py -datafile lambada.hdf5 -load 'models/best/lamb-idx-best.pt' -cuda -eval_only -analysis
 python train2.py -datafile lambada.hdf5 -load 'models/best/lamb-ant-best.pt' -cuda -eval_only -analysis
-python train2.py -datafile cbtest.hdf5 -load 'models/best/cbtne-reg-best.pt' -cuda -eval_only -analysis
-python train2.py -datafile cbtest.hdf5 -load 'models/best/cbtne-idx-best.pt' -cuda -eval_only -analysis
-python train2.py -datafile cbtest.hdf5 -load 'models/best/cbtne-ant-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile  cbtest.hdf5 -load 'models/best/cbtne-nofeats-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile  cbtest.hdf5 -load 'models/best/cbtne-reg-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile  cbtest.hdf5 -load 'models/best/cbtne-idx-best.pt' -cuda -eval_only -analysis
+python train2.py -datafile  cbtest.hdf5 -load 'models/best/cbtne-ant-best.pt' -cuda -eval_only -analysis
 
 # ------------------- LAMBADA --------------------------
 
