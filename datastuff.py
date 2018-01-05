@@ -6,6 +6,7 @@ import torch
 import h5py
 from datamodel import Dictionary
 import numpy as np
+import re
 
 def reduce_vocab(word_vecs):
     """
@@ -61,6 +62,13 @@ def make_mt2_targs(batch, max_entities, max_mentions, per_idx):
                     uniq_ents.add(words[i][b]) # it's first so don't add it
 
     return rep_ents
+
+
+def is_word_in_quote(word, sentence):
+    single_quote_match = re.search(u"`.* {} .*'".format(word), sentence)
+    double_quote_match = re.search(u"``.* {} .*''".format(word), sentence)
+    return double_quote_match or single_quote_match
+
 
 class DataStuff(object):
 
@@ -266,8 +274,10 @@ class DataStuff(object):
         if len(anares) == 0:
             anares['is_person'] = { 'correct': 0, 'total': 0 }
             anares['is_speaker'] = { 'correct': 0, 'total': 0 }
+            anares['is_quotespeaker'] = { 'correct': 0, 'total': 0 }
             anares['mt_is_person'] = { 'correct': 0, 'total': 0 }
             anares['mt_is_speaker'] = { 'correct': 0, 'total': 0 }
+            anares['mt_is_quotespeaker'] = { 'correct': 0, 'total': 0 }
 
         if self.mt_loss == "idx-loss":
             mt_answers = batch["mt1_targs"].data.cpu().numpy() # seqlen x batchsize
@@ -282,48 +292,70 @@ class DataStuff(object):
             mt_scores = mt_scores.data.cpu().numpy() # bsz x seqlen x seqlen
 
         for b in range(batchsize):
-            w = ' '.join([d.idx2word[self.words_new2old[int(t)]] for t in context[:,b]])
+            w = u' '.join([d.idx2word[self.words_new2old[int(t)]] for t in context[:,b]])
             a = d.idx2word[self.words_new2old[int(answers[b])]]
-            p = d.idx2word[self.words_new2old[int(preds[b])]]
 
-            if 'speaker' in a:
+            # check for conversation if there are quotes
+            contains_speech = (u" `` " in w and u" '' " in w) or (u" ` " in w and u" ' " in w)
+            answer_is_entity = u'speaker' in a
+            answer_is_speaker = answer_is_entity and contains_speech
+            answer_is_strict_speaker = answer_is_entity and is_word_in_quote(a, w)
+
+            if answer_is_entity:
                 anares['is_person']['total'] += 1
                 anares['is_person']['correct'] += 1 if answers[b] == preds[b] else 0
+            
+            if answer_is_speaker:
+                anares['is_speaker']['total'] += 1
+                anares['is_speaker']['correct'] += 1 if answers[b] == preds[b] else 0
 
-                # check for conversation if there are quotes
-                contains_speech = (" `` " in w and " '' " in w) or (" ` " in w and " ' " in w)
+            if answer_is_strict_speaker:
+                anares['is_quotespeaker']['total'] += 1
+                anares['is_quotespeaker']['correct'] += 1 if answers[b] == preds[b] else 0
+
+            if self.mt_loss == "idx-loss":
                 if contains_speech:
-                    anares['is_speaker']['total'] += 1
-                    anares['is_speaker']['correct'] += 1 if answers[b] == preds[b] else 0
+                    b_mt_mask = mt_mask[:,b]
+                    mt_diff = mt_preds[:,b][b_mt_mask] - mt_answers[:,b][b_mt_mask]
+                    anares['mt_is_speaker']['total'] += np.sum(b_mt_mask)
+                    anares['mt_is_speaker']['correct'] += np.sum(mt_diff == 0)
 
-                    if self.mt_loss == "idx-loss":
-                        b_mt_mask = mt_mask[:,b]
-                        mt_diff = mt_preds[:,b][b_mt_mask] - mt_answers[:,b][b_mt_mask]
-                        anares['mt_is_speaker']['total'] += np.sum(b_mt_mask)
-                        anares['mt_is_speaker']['correct'] += np.sum(mt_diff == 0)
-                
-                if self.mt_loss == "ant-loss":
-                    # mt_scores is bsz x seqlen x seqlen
-                    for s1 in range(seqlen):
-                        if mt_answers[b,s1] > 0: # if repeated entity
-                            anares['mt_is_person']['total'] += 1
-                            anares['mt_is_speaker']['total'] += 1 if contains_speech else 0
-                            w2p = {}
-                            max_w, max_p = 0, 0
-                            for s2 in range(s1 - 1):
-                                cw = context[s2,b]
-                                if cw not in w2p:
-                                    w2p[cw] = 0
-                                w2p[cw] += mt_scores[b,s1,s2]
-                                if max_p < w2p[cw]:
-                                    max_w = cw
-                                    max_p = w2p[cw]
-                            if max_w == context[s1,b]:
-                                anares['mt_is_person']['correct'] += 1
-                                anares['mt_is_speaker']['correct'] += 1 if contains_speech else 0
+                mt_quote_mask = mt_mask[:,b].copy()
+                for s in range(seqlen):
+                    if mt_quote_mask[s]:
+                        context_word = d.idx2word[self.words_new2old[int(context[s,b])]]
+                        if not is_word_in_quote(context_word, w):
+                            mt_quote_mask[s] = False
+            
+                mt_quote_diff = mt_preds[:,b][mt_quote_mask] - mt_answers[:,b][mt_quote_mask]
+                anares['mt_is_quotespeaker']['total'] += np.sum(mt_quote_mask)
+                anares['mt_is_quotespeaker']['correct'] += np.sum(mt_quote_diff == 0)
+
+            elif self.mt_loss == "ant-loss":
+                # mt_scores is bsz x seqlen x seqlen
+                for s1 in range(seqlen):
+                    if mt_answers[b,s1] > 0: # if repeated entity
+                        anares['mt_is_person']['total'] += 1
+                        anares['mt_is_speaker']['total'] += 1 if contains_speech else 0
+                        w2p = {}
+                        max_w, max_p = 0, 0
+                        for s2 in range(s1 - 1):
+                            cw = context[s2,b]
+                            if cw not in w2p:
+                                w2p[cw] = 0
+                            w2p[cw] += mt_scores[b,s1,s2]
+                            if max_p < w2p[cw]:
+                                max_w = cw
+                                max_p = w2p[cw]
                         
+                        if max_w == context[s1,b]:
+                            anares['mt_is_person']['correct'] += 1
+                            anares['mt_is_speaker']['correct'] += 1 if contains_speech else 0
 
-
+                        mt_a = d.idx2word[self.words_new2old[int(context[s1,b])]]
+                        if is_word_in_quote(mt_a, w):
+                            anares['mt_is_quotespeaker']['total'] += 1
+                            anares['mt_is_quotespeaker']['correct'] += 1 if max_w == context[s1,b] else 0
 
 
 
