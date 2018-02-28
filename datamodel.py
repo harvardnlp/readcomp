@@ -87,30 +87,6 @@ class Dictionary(object):
         self.ner2idx[parts[0]] = int(parts[1])
 
 
-  # def create_definition(self):
-  #   defdata = { "word": [], "def": [], "offsets": [], "length": [] }
-  #
-  #   for word in self.word2idx:
-  #     defdata["word"].append(self.word2idx[word])
-  #     defdata["offsets"].append(len(defdata["def"]) + 1)
-  #
-  #     word_syn = wn.synsets(word)
-  #     if len(word_syn) > 0:
-  #       word_def = word_syn[0].definition()
-  #       word_def_tok = nltk.word_tokenize(word_def)
-  #       tokens = [self.word2idx[w] if w in self.word2idx else self.word2idx[UNKNOWN] for w in word_def_tok]
-  #       defdata["def"].extend(tokens)
-  #       defdata["length"].append(len(tokens))
-  #     else:
-  #       defdata["def"].append(0)
-  #       defdata["length"].append(1)
-  #
-  # loc = np.array([np.array(defdata['offsets']), np.array(defdata['length']), np.array(defdata['word'])]).T
-  # loc = loc[np.argsort(-loc[:,1])] # sort by context length in descending order
-  #
-  #   return { 'data': defdata['def'], 'location': loc }
-
-
 class Corpus(object):
   def __init__(self, args_verbose_level, vocab_file, glove_file, glove_size,
                punc_file, stop_word_file, extra_vocab_file, context_target_separator,
@@ -199,12 +175,6 @@ class Corpus(object):
     self.valid   = self.tokenize(os.path.join(path, valid),   training = False)
     print_msg('Loading test data...', 1, self.args_verbose_level)
     self.test    = self.tokenize(os.path.join(path, test),    training = False)
-    # print_msg('Loading control data...', 1, self.args_verbose_level)
-    # self.control = self.tokenize(os.path.join(path, control), training = False)
-    # print_msg('Loading analysis data...', 1, self.args_verbose_level)
-    # self.analysis = self.tokenize(os.path.join(path, analysis), training = False)
-    # print_msg('Loading wordnet definition data...', 1, self.args_verbose_level)
-    # self.definition = self.dictionary.create_definition()
 
     print_msg('\nTraining Data Statistics:\n', 1, self.args_verbose_level)
     train_context_length = self.train['location'][:,1]
@@ -354,14 +324,6 @@ class Corpus(object):
             lst_choices = data['choices'][-1]
             lst_choices.extend([lst_choices[-1]]*(10 - len(lst_choices)))
             print "had to add shit to the choices...."
-            #print choices
-            #print words
-            #assert False
-          #if not all(isinstance(thing, int) for thing in data['choices'][-1]):
-            #print choices
-            #print words
-            #print data['choices'][-1]
-            #assert False
           assert len(data['choices'][-1]) == 10
 
         words = [word if word in self.dictionary.word2idx else UNKNOWN for word in words]
@@ -369,7 +331,6 @@ class Corpus(object):
           if self.dictionary.word2idx[answer] != self.dictionary.word2idx[words[-1]]:
             print answer, words[-1], self.dictionary.word2idx[words[-1]]
             assert False
-          #assert self.dictionary.word2idx[answer] == words[-1]
           if not any(chc == self.dictionary.word2idx[answer] for chc in data['choices'][-1]):
             print [w for w in words]
             print [c for c in choices]

@@ -150,18 +150,6 @@ def load_ensemble(filename, ensemble_type):
   return inputs, outputs, predictions, answers, filename, int(batch_id)
 
 
-def load_speaker_id(path):
-  sid_tags = []
-  try:
-    with codecs.open(path + 'test.txt', 'r', encoding='utf8') as sf:
-      for line in sf:
-        sid_tags.append([datamodel.extract_ner(w) for w in line.split()[:-1]]) # exclude final answer
-  except:
-    sid_tags = []
-    print 'unable to process speaker id file, skipping'
-  return sid_tags
-
-
 def main(arguments):
   global args
   parser = argparse.ArgumentParser(
@@ -169,8 +157,6 @@ def main(arguments):
       formatter_class=argparse.RawDescriptionHelpFormatter) 
   parser.add_argument('--model_dump_pattern', type=str, default='data\\dump\\*.dump',
                       help='file pattern of model dumps for analysis')
-  parser.add_argument('--speaker_id_path', type=str, default='C:\\Users\\lhoang\\Dropbox\\Personal\\Work\\lambada-dataset\\lambada-sam\\original\\',
-                      help='path of folder containing train/test/valid files with speaker id tags')
   parser.add_argument('--analysis_category_file', type=str, default='',
                       help='absolute path of analysis-category file')
   parser.add_argument('--vocab_file_prefix', type=str, default='lambada',
@@ -201,7 +187,7 @@ def main(arguments):
   idx2word = corpus.dictionary.idx2word
   word2idx = corpus.dictionary.word2idx
 
-  sid_tags = load_speaker_id(args.speaker_id_path)
+  sid_tags = []
 
   if args.ensemble and args.ensemble_type == 'all':
     processed_models = {}

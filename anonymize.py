@@ -1,3 +1,5 @@
+# take input file which contains NER tags and anonymize entities
+
 import numpy as np
 import codecs
 import re
@@ -17,8 +19,8 @@ def replace_speaker(word, speaker_id_list):
   else:
     return word
 
-with codecs.open('C:\\Users\\lhoang\\Dropbox\\Personal\\Work\\lambada-dataset\\lambada-sam\\original\\lambadev.txt.lq', 'r', encoding='utf8') as f:
-  with codecs.open('C:\\Users\\lhoang\\Dropbox\\Personal\\Work\\lambada-dataset\\lambada-sam\\original\\lambadev_replace.txt', 'w', encoding='utf8') as wf:
+with codecs.open('lambadev.txt.lq', 'r', encoding='utf8') as f:
+  with codecs.open('lambadev_replace.txt', 'w', encoding='utf8') as wf:
     for line in f:
       tokens = line.split()
       ner_groups = [extract_ner(w) for w in tokens]

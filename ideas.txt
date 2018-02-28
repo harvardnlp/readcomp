@@ -1,6 +1,0 @@
-1 - use self-attention as embeddings
-2 - use first and last layer of self-attention to do 
-3 - use encoder & decoder to predict
-4 - try training an all-linear networks
-5 - remove layernorm and residual
-6 - remove softmax in self-attention in addition to (5)

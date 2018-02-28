@@ -1,6 +1,3 @@
-"""
-pytorch reimplementation of urrthing
-"""
 import argparse
 from collections import defaultdict
 
@@ -8,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
+import numpy as np
+import time
 
 import datastuff
 
@@ -29,8 +28,7 @@ class Reader(nn.Module):
             insize += 3*opt.feat_size + opt.extra_size
         if opt.speaker_feats and not opt.add_inp:
             insize += 2*opt.sp_size
-        self.doc_rnn = nn.GRU(insize, opt.rnn_size, opt.layers, bidirectional=True)
-        self.query_rnn = nn.GRU(insize, opt.rnn_size, opt.layers, bidirectional=True)
+        self.doc_rnn = nn.GRU(insize, 2*opt.rnn_size, opt.layers, bidirectional=True)
         self.drop = nn.Dropout(opt.dropout)
         if opt.add_inp:
             self.extr_lin = nn.Linear(opt.extra_size, opt.emb_size)
@@ -40,14 +38,18 @@ class Reader(nn.Module):
         self.inp_activ = nn.ReLU() if opt.relu else nn.Tanh()
         self.softmax = nn.Softmax(dim=1)
         self.initrange = opt.initrange
-        self.mt_loss, self.mt_step_mode, self.query_mt = opt.mt_loss, opt.mt_step_mode, opt.query_mt
+        self.mt_loss, self.mt_step_mode = opt.mt_loss, opt.mt_step_mode
         if self.mt_loss == "idx-loss":
-            mt_in = opt.rnn_size if self.mt_step_mode == "before" else 2*opt.rnn_size
+            mt_in = 2*opt.rnn_size if self.mt_step_mode == "before" else 4*opt.rnn_size
             self.doc_mt_lin = nn.Linear(mt_in, opt.max_entities+1) # 0 is an ignore idx
-            if self.query_mt:
-                self.query_mt_lin = nn.Linear(mt_in, opt.max_entities+1)
-
+        elif self.mt_loss == "ant-loss":
+            self.transform_for_ants = opt.transform_for_ants
+            if opt.transform_for_ants:
+                trans_size = 2*opt.rnn_size if self.mt_step_mode == "before" else 4*opt.rnn_size
+                self.ant_lin = nn.Linear(2*opt.rnn_size, trans_size, bias=False)
         self.topdrop, self.mt_drop = opt.topdrop, opt.mt_drop
+        self.use_choices, self.use_test_choices = opt.use_choices, opt.use_test_choices
+        self.use_qidx = opt.use_qidx
         self.init_weights(word_embs, words_new2old)
 
 
@@ -64,7 +66,7 @@ class Reader(nn.Module):
         for lut in luts:
             lut.weight.data.uniform_(-initrange, initrange)
 
-        rnns = [self.doc_rnn, self.query_rnn]
+        rnns = [self.doc_rnn]
         for rnn in rnns:
             for thing in rnn.parameters():
                 thing.data.uniform_(-initrange, initrange)
@@ -74,11 +76,12 @@ class Reader(nn.Module):
             lins.append(self.extr_lin)
         if self.mt_loss == "idx-loss":
             lins.append(self.doc_mt_lin)
-            if self.query_mt:
-                lins.append(self.query_mt_lin)
+        if self.mt_loss == "ant-loss" and self.transform_for_ants:
+            lins.append(self.ant_lin)
         for lin in lins:
             lin.weight.data.uniform_(-initrange, initrange)
-            lin.bias.data.zero_()
+            if lin.bias is not None:
+                lin.bias.data.zero_()
 
         # do the word embeddings
         for i in xrange(len(words_new2old)):
@@ -86,7 +89,7 @@ class Reader(nn.Module):
             if old_idx < word_embs.size(0):
                 self.wlut.weight.data[i][:word_embs.size(1)].copy_(word_embs[old_idx])
 
-    def forward(self, batch):
+    def forward(self, batch, val=False):
         """
         returns bsz x seqlen scores
         """
@@ -123,12 +126,18 @@ class Reader(nn.Module):
         if self.drop.p > 0:
             inp = self.drop(inp)
 
-        doc_states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*rnn_size
-        query_states, _ = self.query_rnn(inp) # seqlen x bsz x 2*rnn_size
-        assert query_states.size(0) == seqlen
-        # take last forward state and first bwd state
-        query_rep = torch.cat([query_states[seqlen-1, :, :self.rnn_size],
-                               query_states[0, :, self.rnn_size:]], 1) # bsz x 2*rnn_size
+        # view each state as [fwd_q, fwd_d, bwd_d, bwd_q]
+        states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*2*rnn_size
+        doc_states = states[:, :, self.rnn_size:3*self.rnn_size]
+
+        if self.use_qidx:
+            # get states before and after the question idx
+            b4states = states.view(-1, states.size(2))[batch["qpos"]-bsz][:, :self.rnn_size]
+            afterstates = states.view(-1, states.size(2))[batch["qpos"]+bsz][:, -self.rnn_size:]
+            query_rep = torch.cat([b4states, afterstates], 1) # bsz x 2*rnn_size
+        else:
+            query_rep = torch.cat([states[seqlen-1, :, :self.rnn_size],
+                                   states[0, :, -self.rnn_size:]], 1) # bsz x 2*rnn_size
 
         if self.topdrop and self.drop.p > 0:
             doc_states = self.drop(doc_states)
@@ -136,20 +145,23 @@ class Reader(nn.Module):
 
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
         scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
-        # TODO: punctuation shit
-        doc_mt_scores, query_mt_scores = None, None
-        if self.mt_loss == "idx-loss":
-            doc_mt_scores, query_mt_scores = self.get_step_scores(doc_states, query_states)
-        elif self.mt_loss == "antecedent-loss":
-            doc_mt_scores, query_mt_scores = self.get_ant_scores(doc_states, query_states)
 
-        return self.softmax(scores), doc_mt_scores, query_mt_scores
+        if self.use_choices or (val and self.use_test_choices):
+            scores = batch["choicemask"] * scores
+
+        doc_mt_scores = None
+        if self.mt_loss == "idx-loss":
+            doc_mt_scores = self.get_step_scores(states)
+        elif self.mt_loss == "ant-loss":
+            doc_mt_scores = self.get_ant_scores(states)
+
+        return self.softmax(scores), doc_mt_scores
 
     def get_states_for_step(self, states):
         """
         gets the states we want for doing multiclass pred @ time t
         args:
-          states - seqlen x bsz x 2*rnn_size
+          states - seqlen x bsz x 2*2*rnn_size; view each state as [fwd_q, fwd_d, bwd_d, bwd_q]
         returns:
           seqlen*bsz x something
         """
@@ -160,61 +172,76 @@ class Reader(nn.Module):
         dummy = self.dummy
 
         if self.mt_step_mode == "exact":
-            nustates = states.view(-1, drnn_sz) # seqlen*bsz x 2*rnn_size
+            nustates = states.view(-1, drnn_sz) # seqlen*bsz x 2*2*rnn_size
         elif self.mt_step_mode == "before-after":
             dummyvar = Variable(dummy.expand(bsz, drnn_sz/2))
-            # prepend zeros to front, giving seqlen*bsz x rnn_size
+            # prepend zeros to front, giving seqlen*bsz x 2*rnn_size
             fwds = torch.cat([dummyvar, states.view(-1, drnn_sz)[:-bsz, :drnn_sz/2]], 0)
-            # append zeros to back, giving seqlen*bsz x rnn_size
+            # append zeros to back, giving seqlen*bsz x 2*rnn_size
             bwds = torch.cat([states.view(-1, drnn_sz)[bsz:, drnn_sz/2:], dummyvar], 0)
-            nustates = torch.cat([fwds, bwds], 1) # seqlen*bsz x 2*rnn_size
+            nustates = torch.cat([fwds, bwds], 1) # seqlen*bsz x 2*2*rnn_size
         elif self.mt_step_mode == "before": # just before
             dummyvar = Variable(dummy.expand(bsz, drnn_sz/2))
-            # prepend zeros to front, giving seqlen*bsz x rnn_size
+            # prepend zeros to front, giving seqlen*bsz x 2*rnn_size
             nustates = torch.cat([dummyvar, states.view(-1, drnn_sz)[:-bsz, :drnn_sz/2]], 0)
         else:
             assert False, "%s not a thing" % self.mt_step_mode
         return nustates
 
 
-    def get_step_scores(self, doc_states, query_states):
+    def get_step_scores(self, states):
         """
-        doc_states - seqlen x bsz x 2*rnn_size
-        query_states - seqlen x bsz x 2*rnn_size
+        states - seqlen x bsz x 2*2*rnn_size
+        returns:
+          seqlen*bsz x nclasses
         """
-        states_for_step = self.get_states_for_step(doc_states)
+        states_for_step = self.get_states_for_step(states)
         if self.mt_drop and self.drop.p > 0:
             states_for_step = self.drop(states_for_step)
         doc_mt_preds = self.doc_mt_lin(states_for_step) # seqlen*bsz x nclasses
-        if self.query_mt:
-            states_for_qstep = self.get_states_for_step(query_states)
-            if self.mt_drop and self.drop.p > 0:
-                states_for_qstep = self.drop(states_for_qstep)
-            query_mt_preds = self.query_mt_lin(states_for_qstep)
+        return doc_mt_preds
+
+    def get_ant_scores(self, states):
+        """
+        states - seqlen x bsz x 2*2*rnn_size
+        return:
+          bsz x seqlen x seqlen
+        """
+        seqlen, bsz, drnn_sz = states.size()
+        states_for_step = self.get_states_for_step(states).view(seqlen, bsz, -1)
+
+        # may need to transform first....
+        # bsz x seqlen x sz * bsz x sz x seqlen -> bsz x seqlen x seqlen
+        if self.transform_for_ants:
+            ant_states = states.view(-1, states.size(2))[:, :drnn_sz/2] # seqlen*bsz x 2*rnn_size
+            ant_states = self.ant_lin(ant_states).view(seqlen, bsz, -1)
         else:
-            query_mt_preds = None
-        return doc_mt_preds, query_mt_preds
+            ant_states = states[:, :, :drnn_sz/2] # seqlen x bsz x 2*rnn_size
 
+        # scores = torch.bmm(ant_states.transpose(0, 1),
+        #                    states_for_step.transpose(0, 1).transpose(1, 2))
+        scores = torch.bmm(states_for_step.transpose(0, 1),
+                           ant_states.transpose(0, 1).transpose(1, 2))
+        return scores
 
-def get_ncorrect(batch, scores):
+def predict(batch, scores):
     """
-    i'm just gonna brute force this
+    brute force
     scores - bsz x seqlen
     answers - bsz
     """
     bsz, seqlen = scores.size()
+    preds = np.zeros(bsz, dtype=int) - 1
     words, answers = batch["words"].data, batch["answers"].data
-    ncorrect = 0
     for b in xrange(bsz):
         word2prob = defaultdict(float)
-        best, best_prob = -1, -float("inf")
+        best_prob = -float("inf")
         for i in xrange(seqlen):
             word2prob[words[i][b]] += scores.data[b][i]
             if word2prob[words[i][b]] > best_prob:
-                best = words[i][b]
+                preds[b] = words[i][b]
                 best_prob = word2prob[words[i][b]]
-        ncorrect += (best == answers[b])
-    return ncorrect
+    return preds, answers
 
 
 def attn_sum_loss(batch, scores):
@@ -230,15 +257,33 @@ def attn_sum_loss(batch, scores):
 
 xent = nn.CrossEntropyLoss(ignore_index=0, size_average=False)
 
-def multitask_loss1(batch, doc_mt_scores, query_mt_scores):
+def multitask_loss1(batch, doc_mt_scores):
     """
     doc_mt_scores - seqlen*bsz x nclasses
-    query_mt_scores - seqlen*bsz x nclasses
     """
     mt1_targs = batch["mt1_targs"] # seqlen x bsz, w/ 0 where we want to ignore
     loss = xent(doc_mt_scores, mt1_targs.view(-1))
-    if query_mt_scores is not None:
-        loss = loss + xent(query_mt_scores, mt1_targs.view(-1))
+    return loss
+
+def multitask_loss2(batch, doc_mt_scores, sm):
+    """
+    doc_mt_scores - bsz x seqlen x seqlen
+    N.B. rn this only considers entities that are repeated; should
+      really have it predict a dummy value for things not repeated
+    """
+    bsz, seqlen, _ = doc_mt_scores.size()
+    loss = 0
+    reps = batch["mt2_targs"] # bsz x seqlen; indicators for repeated entities
+    for b in xrange(bsz):
+        # get lower triangle (excluding diagonal!) then softmax
+        pws = sm(torch.tril(doc_mt_scores[b], diagonal=-1)) # seqlen x seqlen
+        words_b = batch["words"].data[:, b].unsqueeze(1).expand(seqlen, seqlen).t()
+        #mask = ents[b].data.unsqueeze(1).expand(seqlen, seqlen).eq(words_b)
+        mask = words_b.t().eq(words_b) # seqlen x seqlen
+        marg_log_probs = (pws * Variable(torch.tril( # probably not necessary to tril...
+            mask.float(), diagonal=-1))).sum(1).add_(1e-6).log()
+        # we need to ignore rows not corresponding to entities
+        loss = loss - marg_log_probs.dot(reps[b])
     return loss
 
 
@@ -252,16 +297,20 @@ parser.add_argument('-load', type=str, default='', help='path to saved model')
 parser.add_argument('-std_feats', action='store_true', help='')
 parser.add_argument('-speaker_feats', action='store_true', help='')
 parser.add_argument('-use_choices', action='store_true', help='')
+parser.add_argument('-use_test_choices', action='store_true', help='')
+parser.add_argument('-use_qidx', action='store_true', help='')
+parser.add_argument('-query_idx', type=int, default=56298, help='query idx in ORIGINAL data')
+
 parser.add_argument('-mt_loss', type=str, default='',
-                    choices=["", "idx-loss", "antecedent-loss"], help='')
-parser.add_argument('-query_mt', action='store_true', help='multitask on query states too')
-parser.add_argument('-mt_step_mode', type=str, default='before-after',
+                    choices=["", "idx-loss", "ant-loss"], help='')
+parser.add_argument('-mt_step_mode', type=str, default='before',
                     choices=["exact", "before-after", "before"],
                     help='which rnn states to use when doing mt stuff')
 parser.add_argument('-max_entities', type=int, default=2,
                     help='number of distinct entities to predict')
 parser.add_argument('-max_mentions', type=int, default=2,
                     help='number of entity tokens to predict')
+parser.add_argument('-transform_for_ants', action='store_true', help='')
 parser.add_argument('-mt_coeff', type=float, default=1, help='scales mt loss')
 
 parser.add_argument('-emb_size', type=int, default=128, help='size of word embeddings')
@@ -274,9 +323,12 @@ parser.add_argument('-dropout', type=float, default=0, help='dropout')
 parser.add_argument('-topdrop', action='store_true', help='dropout on last rnn layer')
 parser.add_argument('-mt_drop', action='store_true', help='dropout before mt decoder')
 parser.add_argument('-relu', action='store_true', help='relu for input mlp')
+parser.add_argument('-eval_only', action='store_true', help='whether to evaluate only on validation data')
+parser.add_argument('-analysis', action='store_true', help='run analysis e.g. mt accuracy, speaker id accuracy')
 
 parser.add_argument('-optim', type=str, default='adam', help='')
 parser.add_argument('-lr', type=float, default=0.001, help='learning rate')
+parser.add_argument('-beta1', type=float, default=0.9, help='')
 parser.add_argument('-epochs', type=int, default=4, help='')
 parser.add_argument('-clip', type=float, default=5, help='gradient clipping')
 parser.add_argument('-initrange', type=float, default=0.1, help='uniform init interval')
@@ -285,10 +337,15 @@ parser.add_argument('-log_interval', type=int, default=200, help='')
 
 parser.add_argument('-cuda', action='store_true', help='')
 args = parser.parse_args()
+saved_args, saved_state = None, None
 
 
 if __name__ == "__main__":
     print args
+
+    np.set_printoptions(threshold=np.nan)
+
+    time_start = time.time()
 
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
@@ -298,15 +355,15 @@ if __name__ == "__main__":
             torch.cuda.manual_seed(args.seed)
 
     # make data
-    data = datastuff.DataStuff(args)
-
-    saved_args, saved_state = None, None
     if len(args.load) > 0:
         saved_stuff = torch.load(args.load)
         saved_args, saved_state = saved_stuff["opt"], saved_stuff["state_dict"]
+        saved_args.datafile = args.datafile
+        data = datastuff.DataStuff(saved_args)
         net = Reader(data.word_embs, data.words_new2old, saved_args)
         net.load_state_dict(saved_state)
     else:
+        data = datastuff.DataStuff(args)
         args.wordtypes = len(data.words_new2old)
         args.ftypes = data.feat_voc_size
         args.sptypes = data.spee_feat_foc_size
@@ -322,10 +379,11 @@ if __name__ == "__main__":
     if args.optim == "adagrad":
         optalg = optim.Adagrad(net.parameters(), lr=args.lr)
     else:
-        optalg = optim.Adam(net.parameters(), lr=args.lr, betas=(0.9, 0.999))
+        optalg = optim.Adam(net.parameters(), lr=args.lr, betas=(args.beta1, 0.999))
 
     batch_start_idxs = range(0, data.ntrain, args.bsz)
     val_batch_start_idxs = range(0, data.nvalid, args.bsz)
+    test_batch_start_idxs = range(0, data.ntest, args.bsz)
 
     def train(epoch):
         pred_loss, mt_loss, ndocs = 0, 0, 0
@@ -336,19 +394,19 @@ if __name__ == "__main__":
             #    break
             net.zero_grad()
             batch = data.load_data(batch_start_idxs[trainperm[batch_idx]],
-                                   args, train=True) # a dict
+                                   args, data_mode='train') # a dict
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k])
-            word_scores, doc_mt_scores, q_mt_scores = net(batch)
+            word_scores, doc_mt_scores = net(batch)
             lossvar = attn_sum_loss(batch, word_scores)
             pred_loss += lossvar.data[0]
             if args.mt_loss == "idx-loss":
-                mt_lossvar = multitask_loss1(batch, doc_mt_scores, q_mt_scores)
+                mt_lossvar = multitask_loss1(batch, doc_mt_scores)
                 mt_loss += mt_lossvar.data[0]
                 lossvar = lossvar + args.mt_coeff*mt_lossvar
-            elif args.mt_loss == "antecedent-loss":
-                mt_lossvar = multitask_loss2(batch, doc_mt_scores, q_mt_scores)
+            elif args.mt_loss == "ant-loss":
+                mt_lossvar = multitask_loss2(batch, doc_mt_scores, net.softmax)
                 mt_loss += mt_lossvar.data[0]
                 lossvar = lossvar + args.mt_coeff*mt_lossvar
             lossvar /= bsz
@@ -364,28 +422,58 @@ if __name__ == "__main__":
         print "train epoch %d | loss %g | mt-los %g" % (epoch, pred_loss/ndocs, mt_loss/ndocs)
 
 
-    def evaluate(epoch):
+    def evaluate(epoch, data_mode, data_batch_start_idxs):
+        net.eval()
         total, ncorrect = 0, 0
-        for i in xrange(len(val_batch_start_idxs)):
-            batch = data.load_data(val_batch_start_idxs[i], args, train=False) # a dict
+        anares = {}
+        reload_args = saved_args if saved_args is not None else args
+        for i in xrange(len(data_batch_start_idxs)):
+            batch = data.load_data(data_batch_start_idxs[i], reload_args, data_mode) # a dict
+
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
-            word_scores, _, _ = net(batch)
-            ncorrect += get_ncorrect(batch, word_scores)
+            word_scores, mt_scores = net(batch, val=True)
+            preds, answers = predict(batch, word_scores)
+            ncorrect += np.sum(preds == answers.cpu().numpy())
             total += bsz
+
+            if args.analysis:
+                data.analyze_data(reload_args.datafile.split('.')[0], batch, preds, answers, mt_scores, anares)
+
         acc = float(ncorrect)/total
-        print "val epoch %d | acc: %g (%d / %d)" % (epoch, acc, ncorrect, total)
+        print "*%s* epoch %d | acc: %g (%d / %d)" % (data_mode, epoch, acc, ncorrect, total)
+        for anamode in anares:
+            ncorrect = anares[anamode]['correct']
+            total = anares[anamode]['total']
+            if total > 0:
+                print '{} | acc: {} ({} / {})'.format(anamode, float(ncorrect) / total, ncorrect, total)
         return acc
 
-    best_acc = 0
-    for epoch in xrange(1, args.epochs+1):
-        train(epoch)
-        acc = evaluate(epoch)
-        if acc > best_acc:
-            best_acc = acc
-            if len(args.save) > 0:
-                print "saving to", args.save
-                state = {"opt": args, "state_dict": net.state_dict()}
-                torch.save(state, args.save)
-        print
+
+    def evaluate_all(epoch):
+        acc_valid = evaluate(epoch, 'valid', val_batch_start_idxs)
+        acc_test  = evaluate(epoch, 'test',  test_batch_start_idxs)
+        return acc_valid
+
+
+    if args.eval_only and len(args.load) > 0:
+        print 'entering eval-only mode using model from *{}*'.format(args.load)
+        acc = evaluate_all(0)
+        print 'accuracy on validation = {}'.format(acc)
+    else:
+        best_acc = 0
+        for epoch in xrange(1, args.epochs+1):
+            train(epoch)
+            acc = evaluate_all(epoch)
+            if acc > best_acc:
+                best_acc = acc
+                if len(args.save) > 0:
+                    print "saving to", args.save
+                    state = {"opt": args, "state_dict": net.state_dict()}
+                    torch.save(state, args.save)
+            print
+
+    time_end = time.time()
+
+    print 'Total elapsed time = {} secs'.format(time_end - time_start)

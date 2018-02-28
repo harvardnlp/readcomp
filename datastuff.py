@@ -229,11 +229,6 @@ class DataStuff(object):
                 qpos = torch.nonzero(self.word_ctx[:, b] == self.query_idx)[0][0]
                 self.query_pos[b] = qpos*bsz + b
 
-        # if args.use_choices:
-        #     # get bsz x 2 tensor of idxs (need to transpose below to be right)
-        #     poss = torch.nonzero(self.word_ctx.t() == self.query_idx)
-        #     self.query_pos.copy_(poss[:, 1]) # 2nd col has nz col in transpose
-
         batch = {"words": self.word_ctx, "answers": self.answers}
         if args.std_feats:
             batch["feats"] = self.feats
