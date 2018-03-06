@@ -15,4 +15,6 @@ Preprocessing:
 
 For training:
 
-    `python train.py -cuda -dropout 0.1 -bsz 64 -epochs 3 -rnn_size 256 -max_entities 2 -max_mentions 2 -clip 10 -datafile lambada.hdf5 -emb_size 128 -std_feats -speaker_feats -maxseqlen 1028 -mt_loss idx-loss -log_interval 1000 -save 'models/lambada.t7'`
+    python train.py -cuda -dropout 0.1 -bsz 64 -epochs 3 -rnn_size 256 -max_entities 2 -max_mentions 2 -clip 10 -datafile lambada.hdf5 -emb_size 128 -std_feats -speaker_feats -maxseqlen 1028 -mt_loss idx-loss -log_interval 1000 -save 'models/lambada.t7'
+
+For more information, view `train.py` for details on parameter settings and descriptions.
