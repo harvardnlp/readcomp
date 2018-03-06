@@ -12,3 +12,7 @@ Preprocessing:
 3. Finally, preprocess the raw train/test/validation text files into .hdf5 files using:
   
     `python preprocess-lambada.py --data ~/data/lambada/lambada-sam/original/ --glove ~/data/glove/glove.6B.100d.txt --train train.txt --valid lambadev_replace.txt --test test.txt --std_feats --ent_feats --disc_feats --speaker_feats --out_file /mnt/models/lambada.hdf5`
+
+For training:
+
+    `python train.py -cuda -dropout 0.1 -bsz 64 -epochs 3 -rnn_size 256 -max_entities 2 -max_mentions 2 -clip 10 -datafile lambada.hdf5 -emb_size 128 -std_feats -speaker_feats -maxseqlen 1028 -mt_loss idx-loss -log_interval 1000 -save 'models/lambada.t7'`
