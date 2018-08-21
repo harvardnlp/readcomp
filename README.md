@@ -1,6 +1,6 @@
-# Improved Entity Tracking for Cloze-style Reading Comprehension #
+# Entity Tracking Improves Cloze-style Reading Comprehension #
 
-PyTorch implementation of the paper "Improved Entity Tracking for Cloze-style Reading Comprehension". 
+PyTorch implementation of the paper "Entity Tracking Improves Cloze-style Reading Comprehension". 
 
 ## Dependencies
 * Python: `h5py`, `numpy`, `nltk`
