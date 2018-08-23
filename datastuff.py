@@ -4,9 +4,6 @@ data crud
 
 import torch
 import h5py
-from datamodel import Dictionary
-import numpy as np
-import re
 
 def reduce_vocab(word_vecs):
     """
@@ -63,13 +60,6 @@ def make_mt2_targs(batch, max_entities, max_mentions, per_idx):
 
     return rep_ents
 
-
-def is_word_in_quote(word, sentence):
-    single_quote_match = re.search(u"`.* {} .*'".format(word), sentence)
-    double_quote_match = re.search(u"``.* {} .*''".format(word), sentence)
-    return double_quote_match or single_quote_match
-
-
 class DataStuff(object):
 
     def __init__(self, args):
@@ -83,7 +73,11 @@ class DataStuff(object):
         # word_embeddings'
         dat = {}
         for key in h5dat.keys():
-            if key.startswith("train") or key.startswith("valid") or key.startswith("test"):
+            if key.startswith("train") or key.startswith("valid"):
+                dat[key] = torch.from_numpy(h5dat[key][:])
+            elif key.startswith("test") and args.test:
+                dat[key] = torch.from_numpy(h5dat[key][:])
+            elif key == "test_data" or key == "test_sid": # just for vocab purposes
                 dat[key] = torch.from_numpy(h5dat[key][:])
 
         words_new2old, words_old2new = reduce_vocab([dat["train_data"], dat["valid_data"],
@@ -92,12 +86,18 @@ class DataStuff(object):
         self.words_new2old, self.words_old2new = words_new2old, words_old2new
 
         # replace words w/ new vocab
-        for key in ['train_data', 'valid_data', 'test_data']:
+        datkeys = ['train_data', 'valid_data']
+        if args.test:
+            datkeys.append('test_data')
+        for key in datkeys:
             for i in xrange(dat[key].size(0)):
                 dat[key][i] = words_old2new[dat[key][i]]
 
         if args.use_choices or args.use_test_choices:
-            for key in ['train_choices', 'valid_choices', 'test_choices']:
+            choickeys = ['train_choices', 'valid_choices']
+            if args.test:
+                choickeys.append('test_choices')
+            for key in choickeys:
                 vec = dat[key].view(-1)
                 for i in xrange(vec.size(0)):
                     vec[i] = words_old2new[vec[i]]
@@ -115,39 +115,49 @@ class DataStuff(object):
             self.sid_new2old, self.sid_old2new = sid_new2old, sid_old2new
 
             # replace
-            for key in ['train_sid', 'valid_sid', 'test_sid']:
+            sidkeys = ['train_sid', 'valid_sid']
+            if args.test:
+                sidkeys.append('test_sid')
+            for key in sidkeys:
                 for i in xrange(dat[key].size(0)):
                     dat[key][i] = sid_old2new[dat[key][i]]
 
         # make offsets 0-indexed
-        for key in ['train_location', 'valid_location', 'test_location']:
+        lockeys = ['train_location', 'valid_location']
+        if args.test:
+            lockeys.append('test_location')
+        for key in lockeys:
             dat[key][:, 0].sub_(1) # first column is offsets
 
         self.ntrain = dat["train_location"].size(0)
         self.nvalid = dat["valid_location"].size(0)
-        self.ntest  = dat["test_location"].size(0)
+        if args.test:
+            self.ntest = dat["test_location"].size(0)
         self.dat = dat
 
         # we need to increment feature indexes so we don't overlap
         pos_voc_size = h5dat['post_vocab_size'][:][0]+1
         self.dat["train_ner"].add_(pos_voc_size)
         self.dat["valid_ner"].add_(pos_voc_size)
-        self.dat["test_ner" ].add_(pos_voc_size)
+        if args.test:
+            self.dat["test_ner"].add_(pos_voc_size)
         self.per_idx = 2 + pos_voc_size # 2 is PERSON
         ner_voc_size = h5dat['ner_vocab_size'][:][0]+1
         self.dat["train_sentence"].add_(pos_voc_size+ner_voc_size)
         self.dat["valid_sentence"].add_(pos_voc_size+ner_voc_size)
-        self.dat["test_sentence" ].add_(pos_voc_size+ner_voc_size)
+        if args.test:
+            self.dat["test_sentence"].add_(pos_voc_size+ner_voc_size)
         #sent_voc_size = h5dat['sent_vocab_size'][:][0]+1
         self.feat_voc_size = max(self.dat["train_sentence"].max(),
-                                 self.dat["valid_sentence"].max(),
-                                 self.dat["test_sentence" ].max())+1
+                                 self.dat["valid_sentence"].max())+1
 
         spee_voc_size = h5dat['spee_vocab_size'][:][0]+1
         self.dat["train_sid"].add_(spee_voc_size)
         self.dat["valid_sid"].add_(spee_voc_size)
-        self.dat["test_sid" ].add_(spee_voc_size)
-        self.spee_feat_foc_size = max(self.dat["train_sid"].max(), self.dat["valid_sid"].max(), self.dat["test_sid"].max())+1
+        if args.test:
+            self.dat["test_sid"].add_(spee_voc_size)
+
+        self.spee_feat_foc_size = max(self.dat["train_sid"].max(), self.dat["valid_sid"].max())+1
 
         self.extra_size = dat["train_extr"].size(1)
         self.mt_loss = args.mt_loss
@@ -169,14 +179,19 @@ class DataStuff(object):
         h5dat.close()
 
 
-    def load_data(self, batch_idx, args, data_mode='train'):
+    def load_data(self, batch_idx, args, mode="train"):
         """
         dat is a dict w/ all the data stuff
         batch_idx is the idx of first thing in the batch
         """
         dat = self.dat
-        pfx = data_mode
-        train = data_mode == 'train'
+        if mode == "train":
+            pfx = "train"
+        elif mode == "test":
+            pfx = "test"
+        else:
+            pfx = "valid"
+        #pfx = "train" if train else "valid"
         loc = dat["%s_location" % pfx] # nexamples x 3
         bsz = min(args.bsz, loc.size(0)-batch_idx)
         max_ctx_len = min(args.maxseqlen, loc[batch_idx:batch_idx+bsz, 1].max())
@@ -184,13 +199,13 @@ class DataStuff(object):
         self.answers.resize_(bsz).zero_()
         self.linenos.resize_(bsz).zero_()
 
-        if args.std_feats:
+        if args.std_feats or self.mt_loss != "":
             self.feats.resize_(max_ctx_len, bsz, 3).zero_()
             self.extr.resize_(max_ctx_len, bsz, self.extra_size).zero_()
         if args.speaker_feats:
             self.spee_feats.resize_(max_ctx_len, bsz, 2).zero_()
 
-        if args.use_choices or (args.use_test_choices and not train):
+        if args.use_choices or (args.use_test_choices and mode != "train"):
             self.choicemask.resize_(bsz, max_ctx_len).zero_()
 
         if self.use_qidx:
@@ -205,7 +220,7 @@ class DataStuff(object):
 
             self.word_ctx[-capped_len:, b].copy_(
                 dat["%s_data" % pfx][answer_idx-capped_len:answer_idx])
-            if args.std_feats:
+            if args.std_feats or self.mt_loss != "":
                 self.feats[-capped_len:, b, 0].copy_(
                     dat["%s_post" % pfx][answer_idx-capped_len:answer_idx])
                 self.feats[-capped_len:, b, 1].copy_(
@@ -220,7 +235,7 @@ class DataStuff(object):
                 self.spee_feats[-capped_len:, b, 1].copy_(
                     dat["%s_sid" % pfx][answer_idx-capped_len:answer_idx])
 
-            if args.use_choices or (args.use_test_choices and not train):
+            if args.use_choices or (args.use_test_choices and mode != "train"):
                 bchoices = set(dat["%s_choices" % pfx][ex_idx])
                 [self.choicemask[b].__setitem__(jj, 1) for jj in xrange(max_ctx_len)
                  if self.word_ctx[jj, b] in bchoices]
@@ -229,130 +244,36 @@ class DataStuff(object):
                 qpos = torch.nonzero(self.word_ctx[:, b] == self.query_idx)[0][0]
                 self.query_pos[b] = qpos*bsz + b
 
+        # if args.use_choices:
+        #     # get bsz x 2 tensor of idxs (need to transpose below to be right)
+        #     poss = torch.nonzero(self.word_ctx.t() == self.query_idx)
+        #     self.query_pos.copy_(poss[:, 1]) # 2nd col has nz col in transpose
+
         batch = {"words": self.word_ctx, "answers": self.answers}
-        if args.std_feats:
+        if args.std_feats or self.mt_loss != "":
             batch["feats"] = self.feats
             batch["extr"] = self.extr
         if args.speaker_feats:
             batch["spee_feats"] = self.spee_feats
-        if args.use_choices or (args.use_test_choices and not train):
+        if args.use_choices or (args.use_test_choices and mode != "train"):
             batch["choicemask"] = self.choicemask
         if self.use_qidx:
             batch["qpos"] = self.query_pos
 
         if self.mt_loss == "idx-loss":
-            if data_mode not in self.cache:
-                self.cache[data_mode] = {}
-            if batch_idx not in self.cache[data_mode]:
+            if batch_idx not in self.cache:
                 targs = make_mt1_targ_idxs(batch, args.max_entities,
                                            args.max_mentions, self.per_idx)
-                self.cache[data_mode][batch_idx] = targs
-            batch["mt1_targs"] = self.cache[data_mode][batch_idx]
+                self.cache[batch_idx] = targs
+            batch["mt1_targs"] = self.cache[batch_idx]
         elif self.mt_loss == "ant-loss":
-            if data_mode not in self.cache:
-                self.cache[data_mode] = {}
-            if batch_idx not in self.cache[data_mode]:
+            if batch_idx not in self.cache:
                 targs = make_mt2_targs(batch, args.max_entities,
                                        args.max_mentions, self.per_idx)
-                self.cache[data_mode][batch_idx] = targs
-            batch["mt2_targs"] = self.cache[data_mode][batch_idx]
+                self.cache[batch_idx] = targs
+            batch["mt2_targs"] = self.cache[batch_idx]
 
         return batch
-
-
-    def analyze_data(self, vocab_file_prefix, batch, preds, answers, mt_scores, anares = {}):
-        d = Dictionary()
-        d.read_from_file(vocab_file_prefix)
-        context = batch['words'].data.cpu().numpy() # seqlen x bsz
-        seqlen, batchsize = context.shape
-
-        if len(anares) == 0:
-            anares['is_person'] = { 'correct': 0, 'total': 0 }
-            anares['is_speaker'] = { 'correct': 0, 'total': 0 }
-            anares['is_quotespeaker'] = { 'correct': 0, 'total': 0 }
-            anares['mt_is_person'] = { 'correct': 0, 'total': 0 }
-            anares['mt_is_speaker'] = { 'correct': 0, 'total': 0 }
-            anares['mt_is_quotespeaker'] = { 'correct': 0, 'total': 0 }
-
-        if self.mt_loss == "idx-loss":
-            mt_answers = batch["mt1_targs"].data.cpu().numpy() # seqlen x batchsize
-            mt_mask = mt_answers != 0
-            mt_scores = mt_scores.data.cpu().numpy().reshape(seqlen, batchsize, -1)
-            mt_preds = np.argmax(mt_scores, 2)
-            mt_diff = mt_preds[mt_mask] - mt_answers[mt_mask]
-            anares['mt_is_person']['total'] += np.sum(mt_mask)
-            anares['mt_is_person']['correct'] += np.sum(mt_diff == 0)
-        elif self.mt_loss == 'ant-loss':
-            mt_answers = batch["mt2_targs"].data.cpu().numpy() # bsz x seqlen
-            mt_scores = mt_scores.data.cpu().numpy() # bsz x seqlen x seqlen
-
-        for b in range(batchsize):
-            w = u' '.join([d.idx2word[self.words_new2old[int(t)]] for t in context[:,b]])
-            a = d.idx2word[self.words_new2old[int(answers[b])]]
-
-            # check for conversation if there are quotes
-            contains_speech = (u" `` " in w and u" '' " in w) or (u" ` " in w and u" ' " in w)
-            answer_is_entity = u'speaker' in a
-            answer_is_speaker = answer_is_entity and contains_speech
-            answer_is_strict_speaker = answer_is_entity and is_word_in_quote(a, w)
-
-            if answer_is_entity:
-                anares['is_person']['total'] += 1
-                anares['is_person']['correct'] += 1 if answers[b] == preds[b] else 0
-            
-            if answer_is_speaker:
-                anares['is_speaker']['total'] += 1
-                anares['is_speaker']['correct'] += 1 if answers[b] == preds[b] else 0
-
-            if answer_is_strict_speaker:
-                anares['is_quotespeaker']['total'] += 1
-                anares['is_quotespeaker']['correct'] += 1 if answers[b] == preds[b] else 0
-
-            if self.mt_loss == "idx-loss":
-                if contains_speech:
-                    b_mt_mask = mt_mask[:,b]
-                    mt_diff = mt_preds[:,b][b_mt_mask] - mt_answers[:,b][b_mt_mask]
-                    anares['mt_is_speaker']['total'] += np.sum(b_mt_mask)
-                    anares['mt_is_speaker']['correct'] += np.sum(mt_diff == 0)
-
-                mt_quote_mask = mt_mask[:,b].copy()
-                for s in range(seqlen):
-                    if mt_quote_mask[s]:
-                        context_word = d.idx2word[self.words_new2old[int(context[s,b])]]
-                        if not is_word_in_quote(context_word, w):
-                            mt_quote_mask[s] = False
-            
-                mt_quote_diff = mt_preds[:,b][mt_quote_mask] - mt_answers[:,b][mt_quote_mask]
-                anares['mt_is_quotespeaker']['total'] += np.sum(mt_quote_mask)
-                anares['mt_is_quotespeaker']['correct'] += np.sum(mt_quote_diff == 0)
-
-            elif self.mt_loss == "ant-loss":
-                # mt_scores is bsz x seqlen x seqlen
-                for s1 in range(seqlen):
-                    if mt_answers[b,s1] > 0: # if repeated entity
-                        anares['mt_is_person']['total'] += 1
-                        anares['mt_is_speaker']['total'] += 1 if contains_speech else 0
-                        w2p = {}
-                        max_w, max_p = 0, 0
-                        for s2 in range(s1 - 1):
-                            cw = context[s2,b]
-                            if cw not in w2p:
-                                w2p[cw] = 0
-                            w2p[cw] += mt_scores[b,s1,s2]
-                            if max_p < w2p[cw]:
-                                max_w = cw
-                                max_p = w2p[cw]
-                        
-                        if max_w == context[s1,b]:
-                            anares['mt_is_person']['correct'] += 1
-                            anares['mt_is_speaker']['correct'] += 1 if contains_speech else 0
-
-                        mt_a = d.idx2word[self.words_new2old[int(context[s1,b])]]
-                        if is_word_in_quote(mt_a, w):
-                            anares['mt_is_quotespeaker']['total'] += 1
-                            anares['mt_is_quotespeaker']['correct'] += 1 if max_w == context[s1,b] else 0
-
-
 
     def del_word_embs(self):
         del self.word_embs

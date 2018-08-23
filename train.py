@@ -5,8 +5,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
-import numpy as np
-import time
 
 import datastuff
 
@@ -49,7 +47,6 @@ class Reader(nn.Module):
                 self.ant_lin = nn.Linear(2*opt.rnn_size, trans_size, bias=False)
         self.topdrop, self.mt_drop = opt.topdrop, opt.mt_drop
         self.use_choices, self.use_test_choices = opt.use_choices, opt.use_test_choices
-        self.use_qidx = opt.use_qidx
         self.init_weights(word_embs, words_new2old)
 
 
@@ -130,7 +127,7 @@ class Reader(nn.Module):
         states, _ = self.doc_rnn(inp) # seqlen x bsz x 2*2*rnn_size
         doc_states = states[:, :, self.rnn_size:3*self.rnn_size]
 
-        if self.use_qidx:
+        if args.use_qidx:
             # get states before and after the question idx
             b4states = states.view(-1, states.size(2))[batch["qpos"]-bsz][:, :self.rnn_size]
             afterstates = states.view(-1, states.size(2))[batch["qpos"]+bsz][:, -self.rnn_size:]
@@ -224,24 +221,25 @@ class Reader(nn.Module):
                            ant_states.transpose(0, 1).transpose(1, 2))
         return scores
 
-def predict(batch, scores):
+def get_ncorrect(batch, scores):
     """
-    brute force
+    i'm just gonna brute force this
     scores - bsz x seqlen
     answers - bsz
     """
     bsz, seqlen = scores.size()
-    preds = np.zeros(bsz, dtype=int) - 1
     words, answers = batch["words"].data, batch["answers"].data
+    ncorrect = 0
     for b in xrange(bsz):
         word2prob = defaultdict(float)
-        best_prob = -float("inf")
+        best, best_prob = -1, -float("inf")
         for i in xrange(seqlen):
             word2prob[words[i][b]] += scores.data[b][i]
             if word2prob[words[i][b]] > best_prob:
-                preds[b] = words[i][b]
+                best = words[i][b]
                 best_prob = word2prob[words[i][b]]
-    return preds, answers
+        ncorrect += (best == answers[b])
+    return ncorrect
 
 
 def attn_sum_loss(batch, scores):
@@ -323,8 +321,6 @@ parser.add_argument('-dropout', type=float, default=0, help='dropout')
 parser.add_argument('-topdrop', action='store_true', help='dropout on last rnn layer')
 parser.add_argument('-mt_drop', action='store_true', help='dropout before mt decoder')
 parser.add_argument('-relu', action='store_true', help='relu for input mlp')
-parser.add_argument('-eval_only', action='store_true', help='whether to evaluate only on validation data')
-parser.add_argument('-analysis', action='store_true', help='run analysis e.g. mt accuracy, speaker id accuracy')
 
 parser.add_argument('-optim', type=str, default='adam', help='')
 parser.add_argument('-lr', type=float, default=0.001, help='learning rate')
@@ -335,17 +331,15 @@ parser.add_argument('-initrange', type=float, default=0.1, help='uniform init in
 parser.add_argument('-seed', type=int, default=3435, help='')
 parser.add_argument('-log_interval', type=int, default=200, help='')
 
+parser.add_argument('-test', action='store_true', help='')
+parser.add_argument('-just_eval', action='store_true', help='')
+
 parser.add_argument('-cuda', action='store_true', help='')
 args = parser.parse_args()
-saved_args, saved_state = None, None
 
 
 if __name__ == "__main__":
     print args
-
-    np.set_printoptions(threshold=np.nan)
-
-    time_start = time.time()
 
     torch.manual_seed(args.seed)
     if torch.cuda.is_available():
@@ -355,15 +349,15 @@ if __name__ == "__main__":
             torch.cuda.manual_seed(args.seed)
 
     # make data
+    data = datastuff.DataStuff(args)
+
+    saved_args, saved_state = None, None
     if len(args.load) > 0:
         saved_stuff = torch.load(args.load)
         saved_args, saved_state = saved_stuff["opt"], saved_stuff["state_dict"]
-        saved_args.datafile = args.datafile
-        data = datastuff.DataStuff(saved_args)
         net = Reader(data.word_embs, data.words_new2old, saved_args)
         net.load_state_dict(saved_state)
     else:
-        data = datastuff.DataStuff(args)
         args.wordtypes = len(data.words_new2old)
         args.ftypes = data.feat_voc_size
         args.sptypes = data.spee_feat_foc_size
@@ -383,7 +377,8 @@ if __name__ == "__main__":
 
     batch_start_idxs = range(0, data.ntrain, args.bsz)
     val_batch_start_idxs = range(0, data.nvalid, args.bsz)
-    test_batch_start_idxs = range(0, data.ntest, args.bsz)
+    if args.test:
+        test_batch_start_idxs = range(0, data.ntest, args.bsz)
 
     def train(epoch):
         pred_loss, mt_loss, ndocs = 0, 0, 0
@@ -394,7 +389,7 @@ if __name__ == "__main__":
             #    break
             net.zero_grad()
             batch = data.load_data(batch_start_idxs[trainperm[batch_idx]],
-                                   args, data_mode='train') # a dict
+                                   args, mode="train") # a dict
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k])
@@ -422,58 +417,43 @@ if __name__ == "__main__":
         print "train epoch %d | loss %g | mt-los %g" % (epoch, pred_loss/ndocs, mt_loss/ndocs)
 
 
-    def evaluate(epoch, data_mode, data_batch_start_idxs):
+    def evaluate(epoch, test=False):
         net.eval()
         total, ncorrect = 0, 0
-        anares = {}
-        reload_args = saved_args if saved_args is not None else args
-        for i in xrange(len(data_batch_start_idxs)):
-            batch = data.load_data(data_batch_start_idxs[i], reload_args, data_mode) # a dict
-
+        start_idxs = test_batch_start_idxs if test else val_batch_start_idxs
+        mode = "test" if test else "valid"
+        for i in xrange(len(start_idxs)):
+            batch = data.load_data(start_idxs[i], args, mode=mode) # a dict
             bsz = batch["words"].size(1)
             for k in batch:
                 batch[k] = Variable(batch[k].cuda() if args.cuda else batch[k], volatile=True)
-            word_scores, mt_scores = net(batch, val=True)
-            preds, answers = predict(batch, word_scores)
-            ncorrect += np.sum(preds == answers.cpu().numpy())
+            word_scores, _ = net(batch, val=True)
+            ncorrect += get_ncorrect(batch, word_scores)
             total += bsz
-
-            if args.analysis:
-                data.analyze_data(reload_args.datafile.split('.')[0], batch, preds, answers, mt_scores, anares)
-
         acc = float(ncorrect)/total
-        print "*%s* epoch %d | acc: %g (%d / %d)" % (data_mode, epoch, acc, ncorrect, total)
-        for anamode in anares:
-            ncorrect = anares[anamode]['correct']
-            total = anares[anamode]['total']
-            if total > 0:
-                print '{} | acc: {} ({} / {})'.format(anamode, float(ncorrect) / total, ncorrect, total)
+        print "val epoch %d | acc: %g (%d / %d)" % (epoch, acc, ncorrect, total)
         return acc
 
-
-    def evaluate_all(epoch):
-        acc_valid = evaluate(epoch, 'valid', val_batch_start_idxs)
-        acc_test  = evaluate(epoch, 'test',  test_batch_start_idxs)
-        return acc_valid
-
-
-    if args.eval_only and len(args.load) > 0:
-        print 'entering eval-only mode using model from *{}*'.format(args.load)
-        acc = evaluate_all(0)
-        print 'accuracy on validation = {}'.format(acc)
+    if args.just_eval:
+        acc = evaluate(0)
+        if args.test:
+            acc = evaluate(0, test=True)
     else:
         best_acc = 0
-        for epoch in xrange(1, args.epochs+1):
+        epoch = 1
+        improved = False
+        while epoch < args.epochs+1 or improved:
+        #for epoch in xrange(1, args.epochs+1):
             train(epoch)
-            acc = evaluate_all(epoch)
+            acc = evaluate(epoch)
             if acc > best_acc:
                 best_acc = acc
+                improved = True
                 if len(args.save) > 0:
                     print "saving to", args.save
                     state = {"opt": args, "state_dict": net.state_dict()}
                     torch.save(state, args.save)
+            else:
+                improved = False        
+            epoch += 1
             print
-
-    time_end = time.time()
-
-    print 'Total elapsed time = {} secs'.format(time_end - time_start)
