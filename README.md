@@ -1,6 +1,6 @@
 # Entity Tracking Improves Cloze-style Reading Comprehension #
 
-PyTorch implementation of the paper "Entity Tracking Improves Cloze-style Reading Comprehension". 
+PyTorch implementation of the paper "Entity Tracking Improves Cloze-style Reading Comprehension" (credit: swiseman). 
 
 ## Tested environment:
 * Python 2.7.14: `h5py`, `numpy`, `nltk`
