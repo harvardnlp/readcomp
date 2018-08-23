@@ -28,3 +28,6 @@ Preprocess the raw train/test/validation text files into .hdf5 files using:
 A sample training script is given below. For more information, view [`train.py`](https://github.com/harvardnlp/readcomp/blob/master/train.py) for details on parameter settings and descriptions.
 
     python train.py -cuda -datafile <model_file> -save <output_save_model_file.t7> -dropout 0.2 -bsz 64 -epochs 5 -rnn_size 100 -max_entities 5 -max_mentions 2 -clip 10 -beta1 0.7 -mt_coeff 1.5 -emb_size 100 -std_feats -speaker_feats -maxseqlen 1024 -mt_loss idx-loss -log_interval 1000
+
+## License
+MIT
