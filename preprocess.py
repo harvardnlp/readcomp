@@ -201,9 +201,6 @@ def main(arguments):
   parser.add_argument('--validate', action='store_true',
                       help='whether to validate values in the output .hdf5 file')
   args = parser.parse_args(arguments)
-  # get embeddings
-  # word_to_idx, suffix_to_idx, prefix_to_idx, embeddings = get_vocab_embedding(args.vocabsize)
-
 
   out_vocab_file_prefix = args.out_file.split('.')[0]
   start_time = time.time()
@@ -244,9 +241,6 @@ def main(arguments):
         f['sent_vocab_size']  = np.array([corpus.max_sentence_number])
       if args.speaker_feats:
         f['spee_vocab_size']  = np.array([corpus.max_speech_number])
-
-      #f['def_data']         = np.array(corpus.definition['data'])
-      #f['def_location']     = np.array(corpus.definition['location'])
 
       f['train_data']       = np.array(corpus.train['data'])
       if args.std_feats:
@@ -294,22 +288,6 @@ def main(arguments):
         f['train_choices'] = corpus.train['choices'] #np.array(corpus.train['choices'])
         f['valid_choices'] = corpus.valid['choices'] # np.array(corpus.valid['choices'])
         f['test_choices'] = corpus.test['choices'] #np.array(corpus.test['choices'])
-
-      # f['control_data']     = np.array(corpus.control['data'])
-      # f['control_post']     = np.array(corpus.control['post'])
-      # f['control_ner']      = np.array(corpus.control['ner'])
-      # f['control_sentence'] = np.array(corpus.control['sentence'])
-      # f['control_speech']   = np.array(corpus.control['speech'])
-      # f['control_extr']     = np.array(corpus.control['extr'])
-      # f['control_location'] = np.array(corpus.control['location'])
-
-      # f['analysis_data']     = np.array(corpus.analysis['data'])
-      # f['analysis_post']     = np.array(corpus.analysis['post'])
-      # f['analysis_ner']      = np.array(corpus.analysis['ner'])
-      # f['analysis_sentence'] = np.array(corpus.analysis['sentence'])
-      # f['analysis_speech']   = np.array(corpus.analysis['speech'])
-      # f['analysis_extr']     = np.array(corpus.analysis['extr'])
-      # f['analysis_location'] = np.array(corpus.analysis['location'])
 
       if corpus.embeddings != None:
         f['word_embeddings'] = np.array(corpus.embeddings)

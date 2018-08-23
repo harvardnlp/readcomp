@@ -138,7 +138,6 @@ class Reader(nn.Module):
 
         if self.topdrop and self.drop.p > 0:
             doc_states = self.drop(doc_states)
-            #query_rep = self.drop(query_rep)
 
         # bsz x seqlen x 2*rnn_size * bsz x 2*rnn_size x 1 -> bsz x seqlen x 1 -> bsz x seqlen
         scores = torch.bmm(doc_states.transpose(0, 1), query_rep.unsqueeze(2)).squeeze(2)
@@ -215,8 +214,6 @@ class Reader(nn.Module):
         else:
             ant_states = states[:, :, :drnn_sz/2] # seqlen x bsz x 2*rnn_size
 
-        # scores = torch.bmm(ant_states.transpose(0, 1),
-        #                    states_for_step.transpose(0, 1).transpose(1, 2))
         scores = torch.bmm(states_for_step.transpose(0, 1),
                            ant_states.transpose(0, 1).transpose(1, 2))
         return scores
@@ -385,8 +382,6 @@ if __name__ == "__main__":
         net.train()
         trainperm = torch.randperm(len(batch_start_idxs))
         for batch_idx in xrange(len(batch_start_idxs)):
-            #if batch_idx > 100:
-            #    break
             net.zero_grad()
             batch = data.load_data(batch_start_idxs[trainperm[batch_idx]],
                                    args, mode="train") # a dict
@@ -443,7 +438,6 @@ if __name__ == "__main__":
         epoch = 1
         improved = False
         while epoch < args.epochs+1 or improved:
-        #for epoch in xrange(1, args.epochs+1):
             train(epoch)
             acc = evaluate(epoch)
             if acc > best_acc:
